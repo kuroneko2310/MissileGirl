@@ -6,12 +6,17 @@ namespace Gagarin
 {
     public static class GagarinCacheManager
     {
+        private static readonly object CacheMutationSync = new object();
+
         public static void InvalidateXmlCache(string reason = null)
         {
-            DeleteFile(GagarinEnvironmentInfo.UnifiedXmlFilePath);
-            DeleteFile(GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath);
-            DeleteFile(GagarinEnvironmentInfo.ModListFilePath);
-            DeleteFile(GagarinEnvironmentInfo.ModFingerprintFilePath);
+            lock (CacheMutationSync)
+            {
+                DeleteFile(GagarinEnvironmentInfo.UnifiedXmlFilePath);
+                DeleteFile(GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath);
+                DeleteFile(GagarinEnvironmentInfo.ModListFilePath);
+                DeleteFile(GagarinEnvironmentInfo.XmlFingerprintFilePath);
+            }
 
             if (!reason.NullOrEmpty())
                 Log.Warning($"GAGARIN: XML cache invalidated: {reason}");
@@ -19,27 +24,62 @@ namespace Gagarin
 
         public static void ClearTextureCache(string reason = null)
         {
-            try
+            string stalePath = null;
+            lock (CacheMutationSync)
             {
-                if (Directory.Exists(GagarinEnvironmentInfo.TexturesFolderPath))
-                    Directory.Delete(GagarinEnvironmentInfo.TexturesFolderPath, true);
-                Directory.CreateDirectory(GagarinEnvironmentInfo.TexturesFolderPath);
+                try
+                {
+                    string texturePath = GagarinEnvironmentInfo.TexturesFolderPath;
+                    if (Directory.Exists(texturePath))
+                    {
+                        stalePath = texturePath + ".stale-" + Guid.NewGuid().ToString("N");
+                        try
+                        {
+                            Directory.Move(texturePath, stalePath);
+                        }
+                        catch (IOException)
+                        {
+                            // Windows may refuse a rename while an antivirus or loader briefly owns a handle.
+                            Directory.Delete(texturePath, true);
+                            stalePath = null;
+                        }
+                    }
 
-                if (!reason.NullOrEmpty())
-                    Log.Message($"GAGARIN: Texture cache cleared: {reason}");
+                    Directory.CreateDirectory(texturePath);
+                }
+                catch (Exception exception)
+                {
+                    Log.Error($"GAGARIN: Failed rotating texture cache: {exception}");
+                    MissileGirl.Logger.Debug("Failed rotating texture cache", exception: exception);
+                    return;
+                }
             }
-            catch (Exception exception)
+
+            if (!stalePath.NullOrEmpty())
             {
-                Log.Error($"GAGARIN: Failed clearing texture cache: {exception}");
-                MissileGirl.Logger.Debug("Failed clearing texture cache", exception: exception);
+                try
+                {
+                    Directory.Delete(stalePath, true);
+                }
+                catch (Exception exception)
+                {
+                    Log.Warning($"GAGARIN: Old texture cache was detached but could not yet be deleted: {exception.Message}");
+                }
             }
+
+            if (!reason.NullOrEmpty())
+                Log.Message($"GAGARIN: Texture cache cleared: {reason}");
         }
 
         public static void ClearAllCaches(string reason = null)
         {
             InvalidateXmlCache(reason);
-            DeleteFile(GagarinEnvironmentInfo.HashFilePath);
-            DeleteFile(GagarinEnvironmentInfo.HashFilePathInt);
+            lock (CacheMutationSync)
+            {
+                DeleteFile(GagarinEnvironmentInfo.HashFilePath);
+                DeleteFile(GagarinEnvironmentInfo.HashFilePathInt);
+                DeleteFile(GagarinEnvironmentInfo.TextureFingerprintFilePath);
+            }
             ClearTextureCache(reason);
             GagarinPrefs.CacheCreationTime = default;
         }
@@ -52,6 +92,8 @@ namespace Gagarin
                     File.Delete(path);
                 if (File.Exists(path + ".tmp"))
                     File.Delete(path + ".tmp");
+                if (File.Exists(path + ".bak"))
+                    File.Delete(path + ".bak");
             }
             catch (Exception exception)
             {
