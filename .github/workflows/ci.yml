@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - integration/asset-pipeline-safety
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-gagarin:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore Gagarin
+        run: dotnet restore Source/Gagarin/Gagarin.csproj
+      - name: Build Gagarin
+        run: dotnet build Source/Gagarin/Gagarin.csproj --configuration Release --no-restore
+      - name: Upload source snapshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MissileGirl-source
+          path: |
+            Source
+            About
+            1.6/Languages
+            docs
+          if-no-files-found: warn
