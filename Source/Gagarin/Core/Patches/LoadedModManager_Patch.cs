@@ -160,7 +160,8 @@ namespace Gagarin
                     CachedDefHelper.Save();
                     GagarinPrefs.CacheCreationTime = DateTime.Now;
                     RunningModsSetUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.ModListFilePath);
-                    ModFingerprintUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.ModFingerprintFilePath);
+                    ModFingerprintUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.XmlFingerprintFilePath,
+                        ModFingerprintDomain.Xml);
                     GagarinSettings.WriteSettings();
                 }
                 catch (Exception exception)
