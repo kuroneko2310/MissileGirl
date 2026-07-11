@@ -20,31 +20,38 @@ namespace Gagarin
             if (Prefs.LogVerbose)
                 Log.Message("GAGARIN: <color=green>StartUpStarted called!</color>");
 
-            // Settings must be loaded before cache age and game-build validation.
             Logger.Message("GAGARIN: <color=green>Loading cache settings!</color>");
             GagarinSettings.LoadSettings();
 
             Context.IsUsingCache = GagarinEnvironmentInfo.CacheExists;
-            if (Context.IsUsingCache && GagarinEnvironmentInfo.ModListChanged)
+            if (Context.IsUsingCache && GagarinEnvironmentInfo.XmlInputsChanged)
             {
                 Context.IsUsingCache = false;
-                Log.Warning("GAGARIN: Mod order or mod content changed. Rebuilding XML cache.");
+                Log.Warning("GAGARIN: XML inputs, assemblies, mod order, or active load folders changed. Rebuilding XML cache.");
+            }
+
+            if (GagarinEnvironmentInfo.TextureInputsChanged)
+            {
+                GagarinCacheManager.ClearTextureCache("mod textures, assemblies, or active load folders changed");
+                Log.Message("GAGARIN: Texture inputs changed. XML cache was preserved where possible.");
             }
 
             if (Context.IsUsingCache && IsCacheExpired())
             {
                 GagarinPrefs.CacheCreationTime = default;
                 Context.IsUsingCache = false;
-                Log.Warning("GAGARIN: Cache expired.");
+                Log.Warning("GAGARIN: XML cache expired.");
                 GagarinSettings.WriteSettings();
             }
 
-            // Persist the state that was actually inspected. These files are written atomically.
             RunningModsSetUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.ModListFilePath);
-            ModFingerprintUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.ModFingerprintFilePath);
+            ModFingerprintUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.XmlFingerprintFilePath,
+                ModFingerprintDomain.Xml);
+            ModFingerprintUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.TextureFingerprintFilePath,
+                ModFingerprintDomain.Textures);
 
             if (!Context.IsUsingCache && GagarinPrefs.Enabled)
-                Log.Warning("GAGARIN: <color=green>Cache not found, invalid or scheduled for rebuilding.</color>");
+                Log.Warning("GAGARIN: <color=green>XML cache not found, invalid, or scheduled for rebuilding.</color>");
 
             if (GagarinPrefs.Enabled)
                 GagarinPatcher.PatchAll();
@@ -61,7 +68,6 @@ namespace Gagarin
             if (creationTime == default)
                 return true;
 
-            // A clock correction into the future should not make a cache immortal.
             if (creationTime > DateTime.Now.AddMinutes(5))
                 return true;
 
