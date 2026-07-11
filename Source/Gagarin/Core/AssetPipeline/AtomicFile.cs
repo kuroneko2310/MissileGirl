@@ -47,8 +47,14 @@ namespace Gagarin
                     document.Save(writer);
             });
 
-            var verification = new XmlDocument();
-            verification.Load(destinationPath);
+            var verification = new XmlDocument { XmlResolver = null };
+            var readerSettings = new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null
+            };
+            using (var reader = XmlReader.Create(destinationPath, readerSettings))
+                verification.Load(reader);
             if (verification.DocumentElement == null)
                 throw new InvalidDataException($"Atomic XML write produced no root element: {destinationPath}");
         }
@@ -60,7 +66,7 @@ namespace Gagarin
 
             Write(destinationPath, target =>
             {
-                using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                     source.CopyTo(target);
             });
         }
@@ -76,8 +82,9 @@ namespace Gagarin
             if (!string.IsNullOrEmpty(directory))
                 Directory.CreateDirectory(directory);
 
-            var temporaryPath = destinationPath + ".tmp-" + Guid.NewGuid().ToString("N");
-            var backupPath = destinationPath + ".bak";
+            var operationId = Guid.NewGuid().ToString("N");
+            var temporaryPath = destinationPath + ".tmp-" + operationId;
+            var backupPath = destinationPath + ".bak-" + operationId;
 
             try
             {
@@ -97,19 +104,23 @@ namespace Gagarin
                 {
                     try
                     {
-                        if (File.Exists(backupPath))
-                            File.Delete(backupPath);
                         File.Replace(temporaryPath, destinationPath, backupPath, true);
-                        if (File.Exists(backupPath))
-                            File.Delete(backupPath);
                     }
                     catch (PlatformNotSupportedException)
                     {
-                        ReplaceByMove(temporaryPath, destinationPath);
+                        ReplaceByMoveIfTemporaryExists(temporaryPath, destinationPath);
+                    }
+                    catch (NotSupportedException)
+                    {
+                        ReplaceByMoveIfTemporaryExists(temporaryPath, destinationPath);
                     }
                     catch (IOException)
                     {
-                        ReplaceByMove(temporaryPath, destinationPath);
+                        ReplaceByMoveIfTemporaryExists(temporaryPath, destinationPath);
+                    }
+                    finally
+                    {
+                        DeleteBestEffort(backupPath);
                     }
                 }
                 else
@@ -119,9 +130,16 @@ namespace Gagarin
             }
             finally
             {
-                if (File.Exists(temporaryPath))
-                    File.Delete(temporaryPath);
+                DeleteBestEffort(temporaryPath);
+                DeleteBestEffort(backupPath);
             }
+        }
+
+        private static void ReplaceByMoveIfTemporaryExists(string temporaryPath, string destinationPath)
+        {
+            if (!File.Exists(temporaryPath))
+                throw new IOException("Atomic replacement consumed the temporary file before reporting failure.");
+            ReplaceByMove(temporaryPath, destinationPath);
         }
 
         private static void ReplaceByMove(string temporaryPath, string destinationPath)
@@ -133,14 +151,28 @@ namespace Gagarin
             try
             {
                 File.Move(temporaryPath, destinationPath);
-                if (File.Exists(oldPath))
-                    File.Delete(oldPath);
+                DeleteBestEffort(oldPath);
             }
             catch
             {
                 if (!File.Exists(destinationPath) && File.Exists(oldPath))
                     File.Move(oldPath, destinationPath);
                 throw;
+            }
+        }
+
+        private static void DeleteBestEffort(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return;
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch
+            {
+                // A stale temporary/backup is safer than reporting a completed replacement as failed.
             }
         }
     }
