@@ -17,10 +17,21 @@ namespace Gagarin
 
     internal static class ModFingerprintUtility
     {
+        private sealed class CachedStrongHash
+        {
+            public long Length;
+            public long LastWriteTicks;
+            public string Hash;
+        }
+
         private static readonly HashSet<string> TextureExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             ".png", ".dds", ".jpg", ".jpeg", ".tga", ".bmp"
         };
+
+        private static readonly object StrongHashSync = new object();
+        private static readonly Dictionary<string, CachedStrongHash> StrongHashCache =
+            new Dictionary<string, CachedStrongHash>(StringComparer.OrdinalIgnoreCase);
 
         public static bool Changed(List<ModContentPack> mods, string path, ModFingerprintDomain domain)
         {
@@ -47,7 +58,7 @@ namespace Gagarin
             Dictionary<string, string> fingerprints = Build(mods, domain);
             AtomicFile.Write(path, temporaryPath =>
             {
-                XmlDocument document = new XmlDocument();
+                XmlDocument document = new XmlDocument { XmlResolver = null };
                 XmlElement root = document.CreateElement("ModFingerprints");
                 root.SetAttribute("domain", domain.ToString());
                 document.AppendChild(root);
@@ -129,8 +140,6 @@ namespace Gagarin
 
                 if (domain == ModFingerprintDomain.Xml)
                 {
-                    // XML contents are hashed by LoadableXmlAsset_Patch later in the same startup.
-                    // Metadata here gives an early rejection without reading every XML file twice.
                     AddFolder(builder, Path.Combine(loadFolder, "Defs"), seenFiles, IsXmlInput, false);
                     AddFolder(builder, Path.Combine(loadFolder, "Patches"), seenFiles, IsXmlInput, false);
                     AddFolder(builder, Path.Combine(loadFolder, "Assemblies"), seenFiles, IsAssembly, true);
@@ -186,7 +195,7 @@ namespace Gagarin
                     .Append('|').Append(info.LastWriteTimeUtc.Ticks);
 
                 if (strongHash)
-                    builder.Append('|').Append(HashFile(info.FullName));
+                    builder.Append('|').Append(HashFile(info));
             }
             catch (Exception exception)
             {
@@ -211,11 +220,31 @@ namespace Gagarin
             return ToHex(sha.ComputeHash(Encoding.UTF8.GetBytes(value ?? string.Empty)));
         }
 
-        private static string HashFile(string path)
+        private static string HashFile(FileInfo info)
         {
-            using SHA256 sha = SHA256.Create();
-            using FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            return ToHex(sha.ComputeHash(stream));
+            string fullPath = info.FullName;
+            long length = info.Length;
+            long lastWriteTicks = info.LastWriteTimeUtc.Ticks;
+
+            lock (StrongHashSync)
+            {
+                if (StrongHashCache.TryGetValue(fullPath, out CachedStrongHash cached)
+                    && cached.Length == length
+                    && cached.LastWriteTicks == lastWriteTicks)
+                    return cached.Hash;
+
+                using SHA256 sha = SHA256.Create();
+                using FileStream stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read,
+                    FileShare.ReadWrite, 64 * 1024, FileOptions.SequentialScan);
+                string hash = ToHex(sha.ComputeHash(stream));
+                StrongHashCache[fullPath] = new CachedStrongHash
+                {
+                    Length = length,
+                    LastWriteTicks = lastWriteTicks,
+                    Hash = hash
+                };
+                return hash;
+            }
         }
 
         private static string ToHex(byte[] bytes) => BitConverter.ToString(bytes).Replace("-", string.Empty);
