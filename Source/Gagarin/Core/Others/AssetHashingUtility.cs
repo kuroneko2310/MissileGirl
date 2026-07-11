@@ -124,7 +124,7 @@ namespace Gagarin
             int read;
             while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
             {
-                md5.TransformBlock(buffer, 0, read, null, 0);
+                md5.TransformBlock(buffer, 0, read, buffer, 0);
                 for (int i = 0; i < read; i++)
                 {
                     fnv ^= buffer[i];
