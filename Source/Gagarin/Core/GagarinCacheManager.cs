@@ -13,6 +13,7 @@ namespace Gagarin
             lock (CacheMutationSync)
             {
                 DeleteFile(GagarinEnvironmentInfo.UnifiedXmlFilePath);
+                DeleteFile(GagarinEnvironmentInfo.UnifiedXmlHashFilePath);
                 DeleteFile(GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath);
                 DeleteFile(GagarinEnvironmentInfo.ModListFilePath);
                 DeleteFile(GagarinEnvironmentInfo.XmlFingerprintFilePath);
@@ -39,7 +40,6 @@ namespace Gagarin
                         }
                         catch (IOException)
                         {
-                            // Windows may refuse a rename while an antivirus or loader briefly owns a handle.
                             Directory.Delete(texturePath, true);
                             stalePath = null;
                         }
