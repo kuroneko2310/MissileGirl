@@ -67,17 +67,20 @@ namespace Gagarin
 
         private void DrawNumeric(string label, ref int value, ref string buffer, int minimum, int maximum)
         {
+            var localValue = value;
+            var localBuffer = buffer ?? value.ToString();
             collapsible.Lambda(30, rect =>
             {
-                buffer ??= value.ToString();
                 var labelRect = rect.LeftPartPixels(rect.width - 100f);
                 var fieldRect = rect.RightPartPixels(95f);
                 var oldAnchor = Text.Anchor;
                 Text.Anchor = TextAnchor.MiddleLeft;
                 Widgets.Label(labelRect, label);
                 Text.Anchor = oldAnchor;
-                Widgets.TextFieldNumeric(fieldRect, ref value, ref buffer, minimum, maximum);
+                Widgets.TextFieldNumeric(fieldRect, ref localValue, ref localBuffer, minimum, maximum);
             }, useMargins: true);
+            value = localValue;
+            buffer = localBuffer;
         }
 
         private void DrawButtonRow(string leftLabel, Action leftAction, string rightLabel, Action rightAction)
