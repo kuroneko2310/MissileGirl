@@ -9,6 +9,7 @@ namespace Gagarin
         private const string CacheFolderName = "Cache";
         private const string TexturesFolderName = "Textures";
         private const string ReportsFolderName = "Reports";
+        private const string CacheSchemaFileName = "CacheSchema.version";
         private const string UnifiedXmlFileName = "Unified.xml";
         private const string UnifiedXmlHashFileName = "Unified.xml.sha256";
         private const string UnifiedPatchedOriginalXmlFileName = "Unified_Original.xml";
@@ -22,6 +23,10 @@ namespace Gagarin
         private static string _cacheFolderPath;
         public static string CacheFolderPath =>
             _cacheFolderPath ??= Path.Combine(RocketEnvironmentInfo.CustomConfigFolderPath, CacheFolderName);
+
+        private static string _cacheSchemaPath;
+        public static string CacheSchemaFilePath =>
+            _cacheSchemaPath ??= Path.Combine(CacheFolderPath, CacheSchemaFileName);
 
         private static string _gagarinSettingsPath;
         public static string GagarinSettingsFilePath =>
@@ -71,6 +76,7 @@ namespace Gagarin
 
         public static bool CacheExists =>
             Directory.Exists(CacheFolderPath)
+            && CacheSchemaUtility.IsCurrent(CacheSchemaFilePath)
             && File.Exists(UnifiedXmlFilePath)
             && File.Exists(UnifiedXmlHashFilePath)
             && File.Exists(HashFilePath)
