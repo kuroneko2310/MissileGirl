@@ -48,13 +48,12 @@ namespace Gagarin
 
         public string FindTexturePolicy(string packageId, string texturePath)
         {
-            var normalizedPath = (texturePath ?? string.Empty).Replace('\\', '/');
+            var normalizedPath = NormalizePath(texturePath);
             var matching = TexturePolicies
                 .Where(rule => string.IsNullOrEmpty(rule.PackageId) ||
                                string.Equals(rule.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
-                .Where(rule => string.IsNullOrEmpty(rule.PathPrefix) ||
-                               normalizedPath.StartsWith(rule.PathPrefix, StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(rule => rule.PathPrefix?.Length ?? 0)
+                .Where(rule => PathPrefixMatches(normalizedPath, rule.PathPrefix))
+                .OrderByDescending(rule => NormalizePath(rule.PathPrefix).Length)
                 .FirstOrDefault();
             return matching?.Serialize();
         }
@@ -68,7 +67,7 @@ namespace Gagarin
             if (!Directory.Exists(extras))
                 return;
 
-            foreach (var path in Directory.EnumerateFiles(extras, "*.xml", SearchOption.AllDirectories))
+            foreach (var path in EnumerateRuleFiles(extras))
             {
                 var name = Path.GetFileName(path);
                 if (name == null || !name.StartsWith("Rocket", StringComparison.OrdinalIgnoreCase))
@@ -105,6 +104,71 @@ namespace Gagarin
             }
         }
 
+        private static IEnumerable<string> EnumerateRuleFiles(string root)
+        {
+            var pending = new Stack<string>();
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            pending.Push(root);
+
+            while (pending.Count > 0)
+            {
+                var directory = pending.Pop();
+                string normalized;
+                try
+                {
+                    normalized = PipelineHash.NormalizePath(directory);
+                }
+                catch
+                {
+                    normalized = directory;
+                }
+
+                if (!visited.Add(normalized))
+                    continue;
+
+                string[] files;
+                try
+                {
+                    files = Directory.GetFiles(directory);
+                }
+                catch (Exception exception)
+                {
+                    Log.Warning($"GAGARIN: Could not enumerate RocketRules files under '{directory}'.\n{exception}");
+                    files = Array.Empty<string>();
+                }
+
+                foreach (var file in files)
+                {
+                    if (string.Equals(Path.GetExtension(file), ".xml", StringComparison.OrdinalIgnoreCase))
+                        yield return file;
+                }
+
+                string[] directories;
+                try
+                {
+                    directories = Directory.GetDirectories(directory);
+                }
+                catch (Exception exception)
+                {
+                    Log.Warning($"GAGARIN: Could not enumerate RocketRules directories under '{directory}'.\n{exception}");
+                    continue;
+                }
+
+                foreach (var child in directories)
+                {
+                    try
+                    {
+                        if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0)
+                            pending.Push(child);
+                    }
+                    catch (Exception exception)
+                    {
+                        Log.Warning($"GAGARIN: Could not inspect RocketRules directory '{child}'.\n{exception}");
+                    }
+                }
+            }
+        }
+
         private void ProcessRule(XmlElement element, string ownerPackageId)
         {
             var packageId = element.GetAttribute("packageId");
@@ -125,7 +189,7 @@ namespace Gagarin
                     var rule = new TexturePolicyRule
                     {
                         PackageId = packageId,
-                        PathPrefix = element.GetAttribute("pathPrefix").Replace('\\', '/'),
+                        PathPrefix = NormalizePath(element.GetAttribute("pathPrefix")),
                         Category = element.GetAttribute("category"),
                         MipPolicy = element.GetAttribute("mipPolicy"),
                         Format = element.GetAttribute("format")
@@ -137,6 +201,41 @@ namespace Gagarin
                     TexturePolicies.Add(rule);
                     break;
             }
+        }
+
+        private static bool PathPrefixMatches(string normalizedPath, string rawPrefix)
+        {
+            var prefix = NormalizePath(rawPrefix).Trim('/');
+            if (string.IsNullOrEmpty(prefix))
+                return true;
+            if (string.IsNullOrEmpty(normalizedPath))
+                return false;
+
+            var path = normalizedPath.Trim('/');
+            if (path.Equals(prefix, StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith(prefix + "/", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            var marker = "/" + prefix;
+            var searchFrom = 0;
+            while (searchFrom < path.Length)
+            {
+                var index = path.IndexOf(marker, searchFrom, StringComparison.OrdinalIgnoreCase);
+                if (index < 0)
+                    return false;
+
+                var end = index + marker.Length;
+                if (end == path.Length || path[end] == '/')
+                    return true;
+                searchFrom = index + 1;
+            }
+
+            return false;
+        }
+
+        private static string NormalizePath(string path)
+        {
+            return (path ?? string.Empty).Replace('\\', '/').Trim();
         }
     }
 }

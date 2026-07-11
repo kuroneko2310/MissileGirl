@@ -50,6 +50,7 @@ namespace Gagarin
                 if (!File.Exists(path) || new FileInfo(path).Length != entry.Size)
                 {
                     entries.Remove(key);
+                    DeleteBlobIfUnreferenced(entry.BlobHash);
                     misses++;
                     SaveIndex();
                     return false;
@@ -75,9 +76,12 @@ namespace Gagarin
                 var blobHash = PipelineHash.BytesSha256(payload);
                 var blobPath = GetBlobPath(blobHash);
                 Directory.CreateDirectory(Path.GetDirectoryName(blobPath));
-                if (!File.Exists(blobPath))
+
+                var wroteBlob = BlobNeedsReplacement(blobPath, blobHash, payload.LongLength);
+                if (wroteBlob)
                     AtomicFile.WriteAllBytes(blobPath, payload);
 
+                entries.TryGetValue(key, out var previousEntry);
                 var now = DateTime.UtcNow.Ticks;
                 entries[key] = new BlobIndexEntry
                 {
@@ -88,9 +92,17 @@ namespace Gagarin
                     Profile = profile ?? string.Empty,
                     Size = payload.LongLength,
                     LastAccessUtcTicks = now,
-                    CreatedUtcTicks = now
+                    CreatedUtcTicks = previousEntry != null && string.Equals(previousEntry.BlobHash, blobHash, StringComparison.OrdinalIgnoreCase)
+                        ? previousEntry.CreatedUtcTicks
+                        : now
                 };
-                bytesWritten += payload.LongLength;
+
+                if (wroteBlob)
+                    bytesWritten += payload.LongLength;
+
+                if (previousEntry != null && !string.Equals(previousEntry.BlobHash, blobHash, StringComparison.OrdinalIgnoreCase))
+                    DeleteBlobIfUnreferenced(previousEntry.BlobHash);
+
                 SaveIndex();
                 PruneToBudget(GagarinPrefs.TextureCacheMaxMB * 1024L * 1024L);
                 return true;
@@ -152,14 +164,27 @@ namespace Gagarin
             {
                 EnsureLoaded();
                 maximumBytes = Math.Max(64L * 1024L * 1024L, maximumBytes);
-                var total = entries.Values.Sum(entry => entry.Size);
+                var groups = entries.Values
+                    .GroupBy(entry => entry.BlobHash, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => new
+                    {
+                        BlobHash = group.Key,
+                        Size = group.Max(entry => entry.Size),
+                        LastAccessUtcTicks = group.Max(entry => entry.LastAccessUtcTicks),
+                        Keys = group.Select(entry => entry.Key).ToList()
+                    })
+                    .OrderBy(group => group.LastAccessUtcTicks)
+                    .ToList();
+
+                var total = groups.Sum(group => group.Size);
                 if (total <= maximumBytes)
                     return;
 
-                foreach (var entry in entries.Values.OrderBy(value => value.LastAccessUtcTicks).ToList())
+                foreach (var group in groups)
                 {
-                    entries.Remove(entry.Key);
-                    total -= entry.Size;
+                    foreach (var key in group.Keys)
+                        entries.Remove(key);
+                    total -= group.Size;
                     if (total <= maximumBytes)
                         break;
                 }
@@ -174,12 +199,13 @@ namespace Gagarin
             lock (sync)
             {
                 EnsureLoaded();
-                var totalBytes = entries.Values.Sum(entry => entry.Size);
+                var totalBytes = GetPhysicalTotalBytes();
                 var requests = hits + misses;
                 var hitRate = requests == 0 ? 0d : hits / (double)requests;
                 return string.Join(";", new[]
                 {
                     "entries=" + entries.Count,
+                    "blobs=" + entries.Values.Select(entry => entry.BlobHash).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
                     "bytes=" + totalBytes,
                     "hits=" + hits,
                     "misses=" + misses,
@@ -197,7 +223,7 @@ namespace Gagarin
                 lock (sync)
                 {
                     EnsureLoaded();
-                    return entries.Values.Sum(entry => entry.Size);
+                    return GetPhysicalTotalBytes();
                 }
             }
         }
@@ -210,7 +236,10 @@ namespace Gagarin
             entries.Clear();
 
             if (!File.Exists(GagarinEnvironmentInfo.BlobIndexFilePath))
+            {
+                DeleteUnreferencedBlobs();
                 return;
+            }
 
             try
             {
@@ -244,9 +273,11 @@ namespace Gagarin
                         LastAccessUtcTicks = ParseLong(element.GetAttribute("lastAccess")),
                         CreatedUtcTicks = ParseLong(element.GetAttribute("created"))
                     };
-                    if (!string.IsNullOrEmpty(entry.Key) && !string.IsNullOrEmpty(entry.BlobHash))
+                    if (!string.IsNullOrEmpty(entry.Key) && IsSha256(entry.BlobHash) && entry.Size > 0)
                         entries[entry.Key] = entry;
                 }
+
+                DeleteUnreferencedBlobs();
             }
             catch (Exception exception)
             {
@@ -261,6 +292,8 @@ namespace Gagarin
                 {
                     // The broken index is allowed to remain; the in-memory index is still clean.
                 }
+
+                DeleteUnreferencedBlobs();
             }
         }
 
@@ -294,21 +327,83 @@ namespace Gagarin
                 return;
 
             var referenced = new HashSet<string>(entries.Values.Select(entry => entry.BlobHash), StringComparer.OrdinalIgnoreCase);
-            foreach (var path in Directory.EnumerateFiles(GagarinEnvironmentInfo.BlobsFolderPath, "*.blob", SearchOption.AllDirectories))
+            IEnumerable<string> paths;
+            try
+            {
+                paths = Directory.GetFiles(GagarinEnvironmentInfo.BlobsFolderPath, "*.blob", SearchOption.AllDirectories);
+            }
+            catch (Exception exception)
+            {
+                Log.Warning($"GAGARIN: Could not enumerate texture blobs for cleanup.\n{exception}");
+                return;
+            }
+
+            foreach (var path in paths)
             {
                 var hash = Path.GetFileNameWithoutExtension(path);
                 if (!referenced.Contains(hash))
-                {
-                    try
-                    {
-                        File.Delete(path);
-                    }
-                    catch (Exception exception)
-                    {
-                        Log.Warning($"GAGARIN: Could not delete unused texture blob '{path}'.\n{exception}");
-                    }
-                }
+                    DeleteBlob(path);
             }
+        }
+
+        private void DeleteBlobIfUnreferenced(string blobHash)
+        {
+            if (string.IsNullOrEmpty(blobHash) || entries.Values.Any(entry => string.Equals(entry.BlobHash, blobHash, StringComparison.OrdinalIgnoreCase)))
+                return;
+            DeleteBlob(GetBlobPath(blobHash));
+        }
+
+        private static void DeleteBlob(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch (Exception exception)
+            {
+                Log.Warning($"GAGARIN: Could not delete unused texture blob '{path}'.\n{exception}");
+            }
+        }
+
+        private static bool BlobNeedsReplacement(string path, string expectedHash, long expectedSize)
+        {
+            if (!File.Exists(path))
+                return true;
+
+            try
+            {
+                var info = new FileInfo(path);
+                if (info.Length != expectedSize)
+                    return true;
+                return !string.Equals(PipelineHash.FileSha256(path), expectedHash, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private long GetPhysicalTotalBytes()
+        {
+            return entries.Values
+                .GroupBy(entry => entry.BlobHash, StringComparer.OrdinalIgnoreCase)
+                .Sum(group => group.Max(entry => entry.Size));
+        }
+
+        private static bool IsSha256(string value)
+        {
+            if (string.IsNullOrEmpty(value) || value.Length != 64)
+                return false;
+            foreach (var character in value)
+            {
+                var isDigit = character >= '0' && character <= '9';
+                var isLowerHex = character >= 'a' && character <= 'f';
+                var isUpperHex = character >= 'A' && character <= 'F';
+                if (!isDigit && !isLowerHex && !isUpperHex)
+                    return false;
+            }
+            return true;
         }
 
         private static string GetBlobPath(string hash)
