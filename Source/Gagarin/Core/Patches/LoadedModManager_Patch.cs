@@ -189,7 +189,7 @@ namespace Gagarin
                 if (Prefs.LogVerbose)
                     Log.Warning("GAGARIN: CombineIntoUnifiedXML has <color=red>Context.IsUsingCache=" + Context.IsUsingCache + "</color>");
 
-                if (/Context.IsUsingCache)
+                if (!Context.IsUsingCache)
                     return true;
 
                 try
