@@ -24,23 +24,21 @@ namespace Gagarin
         {
             public static void Prefix()
             {
+                Context.IsLoadingModXML = true;
+
                 try
                 {
-                    Context.IsLoadingModXML = true;
                     if (File.Exists(GagarinEnvironmentInfo.HashFilePath))
-                    {
                         Context.AssetsHashes = AssetHashingUtility.Load(GagarinEnvironmentInfo.HashFilePath);
-                    }
+
                     if (File.Exists(GagarinEnvironmentInfo.HashFilePathInt))
-                    {
                         Context.AssetsHashesInt = AssetHashingUtility.LoadInt(GagarinEnvironmentInfo.HashFilePathInt);
-                    }
                 }
                 catch (Exception er)
                 {
-                    Context.IsUsingCache = false;
-                    Logger.Debug("GAGARIN: Loading error", er);
-                    throw;
+                    Context.AssetsHashes.Clear();
+                    Context.AssetsHashesInt.Clear();
+                    DisableCache("loading asset hash files", er);
                 }
             }
 
@@ -48,30 +46,33 @@ namespace Gagarin
             {
                 try
                 {
-                    Context.XmlAssets = new Dictionary<string, LoadableXmlAsset>();
-                    foreach (KeyValuePair<string, LoadableXmlAsset> pair in __result.Select(a => new KeyValuePair<string, LoadableXmlAsset>(a.FullFilePath, a)))
-                        Context.XmlAssets.Add(pair.Key, pair.Value);
+                    Context.XmlAssets = __result?
+                        .Where(asset => asset != null && !asset.FullFilePath.NullOrEmpty())
+                        .GroupBy(asset => asset.FullFilePath)
+                        .ToDictionary(group => group.Key, group => group.Last())
+                        ?? new Dictionary<string, LoadableXmlAsset>();
 
                     if (Context.IsUsingCache && Context.Assets.Count != Context.AssetsHashes.Count)
                     {
                         Context.IsUsingCache = false;
-                        Context.AssetsHashes.RemoveAll(a => !Context.Assets.Contains(a.Key));
-                        Context.AssetsHashesInt.RemoveAll(a => !Context.Assets.Contains(a.Key));
-                        Log.Warning("GAGARIN: Total number of files changed. Reseting cache");
+                        Context.AssetsHashes.RemoveAll(asset => !Context.Assets.Contains(asset.Key));
+                        Context.AssetsHashesInt.RemoveAll(asset => !Context.Assets.Contains(asset.Key));
+                        Log.Warning("GAGARIN: Total number of files changed. Resetting XML cache.");
                     }
+
                     if (!Context.IsUsingCache)
                     {
                         AssetHashingUtility.Dump(Context.AssetsHashes, GagarinEnvironmentInfo.HashFilePath);
                         AssetHashingUtility.Dump(Context.AssetsHashesInt, GagarinEnvironmentInfo.HashFilePathInt);
-                        if (File.Exists(GagarinEnvironmentInfo.UnifiedXmlFilePath))
-                            File.Delete(GagarinEnvironmentInfo.UnifiedXmlFilePath);
                     }
-                    Context.IsLoadingModXML = false;
                 }
                 catch (Exception er)
                 {
-                    Logger.Debug("GAGARIN: Loading error", er);
-                    throw;
+                    DisableCache("finalizing XML asset discovery", er);
+                }
+                finally
+                {
+                    Context.IsLoadingModXML = false;
                 }
             }
         }
@@ -90,20 +91,21 @@ namespace Gagarin
         {
             public static bool Prefix()
             {
-                if (Context.IsUsingCache)
+                if (!Context.IsUsingCache)
+                    return true;
+
+                foreach (var mod in Context.RunningMods)
                 {
-                    foreach (var mod in Context.RunningMods)
+                    if (mod.patches != null)
                     {
-                        if (mod.patches != null)
-                        {
-                            foreach (var patch in mod.patches)
-                                patch.neverSucceeded = false;
-                        }
-                        mod.loadedAnyPatches = true;
+                        foreach (var patch in mod.patches)
+                            patch.neverSucceeded = false;
                     }
-                    return false;
+
+                    mod.loadedAnyPatches = true;
                 }
-                return true;
+
+                return false;
             }
         }
 
@@ -116,40 +118,34 @@ namespace Gagarin
                 try
                 {
                     CachedDefHelper.Prepare();
-
                     return !Context.IsUsingCache;
                 }
                 catch (Exception er)
                 {
-                    Logger.Debug("GAGARIN: Loading error", er);
-                    throw;
+                    DisableCache("preparing the XML cache", er);
+                    return true;
                 }
             }
 
             public static void Postfix(XmlDocument xmlDoc)
             {
-                if (!Context.IsUsingCache)
+                if (Context.IsUsingCache || xmlDoc == null)
+                    return;
+
+                try
                 {
-                    try
+                    var settings = new XmlWriterSettings
                     {
-                        if (File.Exists(GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath))
-                            File.Delete(GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath);
-                        XmlWriterSettings settings = new XmlWriterSettings
-                        {
-                            CheckCharacters = false,
-                            Indent = true,
-                            NewLineChars = "\n"
-                        };
-                        using (XmlWriter writer = XmlWriter.Create(GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath, settings))
-                        {
-                            xmlDoc.Save(writer);
-                        }
-                    }
-                    catch (Exception er)
-                    {
-                        Logger.Debug("GAGARIN: Loading error", er);
-                        throw;
-                    }
+                        CheckCharacters = false,
+                        Indent = true,
+                        NewLineChars = "\n"
+                    };
+                    AtomicFile.SaveXml(GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath, xmlDoc, settings);
+                }
+                catch (Exception er)
+                {
+                    Logger.Debug("GAGARIN: Failed to write the diagnostic unified XML", er);
+                    Log.Warning("GAGARIN: Failed to write diagnostic unified XML. Continuing without it.\n" + er);
                 }
             }
         }
@@ -160,20 +156,19 @@ namespace Gagarin
             [HarmonyPriority(Priority.Last)]
             public static void Postfix()
             {
-                if (!Context.IsUsingCache)
-                {
-                    try
-                    {
-                        GagarinPrefs.CacheCreationTime = DateTime.Now;
-                        GagarinSettings.WriteSettings();
+                if (Context.IsUsingCache)
+                    return;
 
-                        CachedDefHelper.Save();
-                    }
-                    catch (Exception er)
-                    {
-                        Logger.Debug("GAGARIN: Loading error", er);
-                        throw;
-                    }
+                try
+                {
+                    CachedDefHelper.Save();
+                    AssetPipelineCoordinator.CommitXmlGeneration();
+                    GagarinPrefs.CacheCreationTime = DateTime.Now;
+                    GagarinSettings.WriteSettings();
+                }
+                catch (Exception er)
+                {
+                    DisableCache("saving the completed XML cache", er);
                 }
             }
         }
@@ -181,49 +176,77 @@ namespace Gagarin
         [GagarinPatch(typeof(LoadedModManager), nameof(LoadedModManager.CombineIntoUnifiedXML))]
         public static class CombineIntoUnifiedXML_Patch
         {
-            private static bool usedCache = false;
-
             [HarmonyPriority(Priority.Last)]
-            public static bool Prefix(List<LoadableXmlAsset> xmls, ref XmlDocument __result, Dictionary<XmlNode, LoadableXmlAsset> assetlookup)
+            public static bool Prefix(
+                List<LoadableXmlAsset> xmls,
+                ref XmlDocument __result,
+                Dictionary<XmlNode, LoadableXmlAsset> assetlookup,
+                out bool __state)
             {
+                __state = false;
+                Context.DefsXmlAssets = assetlookup;
+
+                if (Prefs.LogVerbose)
+                    Log.Warning("GAGARIN: CombineIntoUnifiedXML has <color=red>Context.IsUsingCache=" + Context.IsUsingCache + "</color>");
+
+                if (!Context.IsUsingCache)
+                    return true;
+
                 try
                 {
-                    Context.DefsXmlAssets = assetlookup;
-                    if (Prefs.LogVerbose)
-                    {
-                        Log.Warning($"GAGARIN: CombineIntoUnifiedXML has <color=red>Context.IsUsingCache={Context.IsUsingCache}</color>");
-                    }
-                    if (Context.IsUsingCache)
-                    {
-                        usedCache = true;
-                        CachedDefHelper.Load(__result = new XmlDocument(), assetlookup);
-                        return false;
-                    }
+                    var cachedDocument = new XmlDocument();
+                    CachedDefHelper.Load(cachedDocument, assetlookup);
+                    __result = cachedDocument;
+                    __state = true;
+                    return false;
                 }
                 catch (Exception er)
                 {
-                    Logger.Debug("GAGARIN: Loading error", er);
-                    throw;
+                    __result = null;
+                    assetlookup?.Clear();
+                    DisableCache("loading Unified.xml", er);
+                    Log.Warning("GAGARIN: Falling back to RimWorld's normal XML combination path.");
+                    return true;
                 }
-                return true;
             }
 
             [HarmonyPriority(Priority.First)]
-            public static void Postfix(XmlDocument __result, Dictionary<XmlNode, LoadableXmlAsset> assetlookup)
+            public static void Postfix(
+                XmlDocument __result,
+                Dictionary<XmlNode, LoadableXmlAsset> assetlookup,
+                bool __state)
             {
-                if (!usedCache && __result != null && !assetlookup.EnumerableNullOrEmpty())
+                if (__state || __result == null || assetlookup.EnumerableNullOrEmpty())
+                    return;
+
+                try
                 {
-                    try
-                    {
-                        DuplicateHelper.ParseCreateReports(__result, assetlookup);
-                    }
-                    catch (Exception er)
-                    {
-                        Logger.Debug("GAGARIN: Loading error", er);
-                        throw;
-                    }
+                    DuplicateHelper.ParseCreateReports(__result, assetlookup);
+                }
+                catch (Exception er)
+                {
+                    Logger.Debug("GAGARIN: Failed to create duplicate XML reports", er);
+                    Log.Warning("GAGARIN: Duplicate XML report generation failed. Continuing startup.\n" + er);
                 }
             }
         }
+
+        private static void DisableCache(string stage, Exception exception)
+        {
+            try
+            {
+                AssetPipelineCoordinator.OnCacheLoadFailure(stage, exception);
+            }
+            catch (Exception disableException)
+            {
+                Context.IsUsingCache = false;
+                Logger.Debug("GAGARIN: Failed to disable cache while " + stage, disableException);
+            }
+
+            Logger.Debug("GAGARIN: Cache error while " + stage, exception);
+            Log.Warning("GAGARIN: Cache error while " + stage + ". The cache has been disabled for this load.\n" + exception);
+        }
+
+
     }
 }

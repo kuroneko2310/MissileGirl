@@ -6,7 +6,7 @@
         <li>1.6</li>
     </supportedVersions>
     <packageId>vr.missilegirl</packageId>
-	<modIconPath IgnoreIfNoMatchingField="True">MissileGirl/UI/missilegirl_preview</modIconPath>
+    <modIconPath IgnoreIfNoMatchingField="True">MissileGirl/UI/missilegirl_preview</modIconPath>
     <modDependencies>
         <li>
             <packageId>brrainz.harmony</packageId>
@@ -19,6 +19,7 @@
         <li>Ludeon.RimWorld</li>
         <li>Ludeon.RimWorld.Royalty</li>
         <li>brrainz.harmony</li>
+        <li>Telefonmast.GraphicsSettings</li>
         <li>UnlimitedHugs.HugsLib</li>
         <li>TheKingInYellow.Lope</li>
         <li>RunneLatki.RabbieRaceMod</li>
@@ -53,12 +54,12 @@
         Credits:
 
         * Current developer: ViralReaction
-		* Previous developer: Karim
-		* The Thumbnail: Smxrez
+        * Previous developer: Karim
+        * The Thumbnail: Smxrez
 
         Special Thanks goes to:
-  
-		Karim for creating original RocketMan
+
+        Karim for creating original RocketMan
 
         You can always ask questions on the Dubwise discord server: https://discord.gg/mKVDMqq4
     </description>

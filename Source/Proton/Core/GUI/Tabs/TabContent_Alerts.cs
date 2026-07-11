@@ -60,6 +60,7 @@ namespace Proton
 
         public override void OnDeselect()
         {
+            RocketMod.Instance.WriteSettings();
             base.OnDeselect();
         }
 
@@ -72,17 +73,23 @@ namespace Proton
         {
             collapsible.Begin(rect, KeyedResources.MissileGirl_Settings);
             collapsible.Label(KeyedResources.Proton_DisalbeAllInfo, invert: true);
-            collapsible.CheckboxLabeled(KeyedResources.Proton_Enable, ref RocketPrefs.AlertThrottling);
+            if (collapsible.CheckboxLabeled(KeyedResources.Proton_Enable, ref RocketPrefs.AlertThrottling))
+            {
+                RocketMod.Instance.WriteSettings();
+            }
             collapsible.Line(1);
             collapsible.Label(KeyedResources.Proton_DisalbeAllInfo);
             collapsible.Line(1);
-            if (collapsible.CheckboxLabeled(KeyedResources.Proton_AlertsDisabled, ref RocketPrefs.DisableAllAlert, disabled: !RocketPrefs.AlertThrottling) && RocketPrefs.DisableAllAlert)
+            if (collapsible.CheckboxLabeled(KeyedResources.Proton_AlertsDisabled, ref RocketPrefs.DisableAllAlert, disabled: !RocketPrefs.AlertThrottling))
             {
                 RocketMod.Instance.WriteSettings();
-                foreach (Alert alert in Context.Alerts)
+                if (RocketPrefs.DisableAllAlert)
                 {
-                    alert.cachedActive = false;
-                    alert.cachedLabel = string.Empty;
+                    foreach (Alert alert in Context.Alerts)
+                    {
+                        alert.cachedActive = false;
+                        alert.cachedLabel = string.Empty;
+                    }
                 }
             }
             collapsible.End(ref rect);

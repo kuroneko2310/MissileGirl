@@ -1,4 +1,4 @@
-﻿// // Copyright (c) 2026 ViralReaction
+// // Copyright (c) 2026 ViralReaction
 // //
 // // This program and the accompanying materials are made available under the
 // // terms of the Eclipse Public License 2.0 which is available at
@@ -9,8 +9,6 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Reflection;
-using JetBrains.Annotations;
 using MissileGirl;
 using Verse;
 
@@ -22,77 +20,57 @@ namespace Gagarin
         public static void StartUpStarted()
         {
             Context.RunningMods = LoadedModManager.RunningMods.ToList();
-            Context.Core = LoadedModManager.RunningMods.First(m => m.IsCoreMod);
+            Context.Core = LoadedModManager.RunningMods.First(mod => mod.IsCoreMod);
 
-            if (!Directory.Exists(GagarinEnvironmentInfo.CacheFolderPath))
-            {
-                Directory.CreateDirectory(GagarinEnvironmentInfo.CacheFolderPath);
-            }
-            if (!Directory.Exists(GagarinEnvironmentInfo.TexturesFolderPath))
-            {
-                Directory.CreateDirectory(GagarinEnvironmentInfo.TexturesFolderPath);
-            }
-            if (Prefs.LogVerbose)
-            {
-                Log.Message("GAGARIN: <color=green>StartUpStarted called!</color>");
-            }
-            if (GagarinEnvironmentInfo.CacheExists)
-            {
-                if (Prefs.LogVerbose)
-                {
-                    Log.Warning("GAGARIN: <color=green>Cache found</color>");
-                }
+            Directory.CreateDirectory(GagarinEnvironmentInfo.CacheFolderPath);
+            Directory.CreateDirectory(GagarinEnvironmentInfo.TexturesFolderPath);
+            Directory.CreateDirectory(GagarinEnvironmentInfo.AssetPipelineFolderPath);
 
-                Context.IsUsingCache = true;
-
-                if (GagarinEnvironmentInfo.ModListChanged)
-                {
-                    Context.IsUsingCache = false;
-                    Log.Warning("GAGARIN: Mod list changed! Deleting cache");
-                }
-            }
-            if (!Context.IsUsingCache && GagarinPrefs.Enabled)
-            {
-                Log.Warning("GAGARIN: <color=green>Cache not found or got purged!</color>");
-            }
-            Logger.Message("GAGARIN: <color=green>Loading cache settings!</color>");
-            RunningModsSetUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.ModListFilePath);
-
+            Logger.Message("GAGARIN: <color=green>Loading cache settings and Asset Pipeline Manifest V2</color>");
             GagarinSettings.LoadSettings();
-            if (GagarinPrefs.CacheExpires && DateTime.Now.Subtract(GagarinPrefs.CacheCreationTime).Days >= GagarinPrefs.CacheRetentionTime)
+
+            try
+            {
+                AssetPipelineCoordinator.Initialize(Context.RunningMods);
+            }
+            catch (Exception exception)
+            {
+                Context.IsUsingCache = false;
+                Log.Warning($"GAGARIN: Asset Pipeline initialization failed. Vanilla XML processing will be used.\n{exception}");
+                Logger.Debug("GAGARIN: Asset Pipeline initialization failure", exception);
+            }
+
+            if (GagarinPrefs.CacheExpires && GagarinPrefs.CacheCreationTime != default(DateTime) &&
+                DateTime.Now.Subtract(GagarinPrefs.CacheCreationTime).Days >= GagarinPrefs.CacheRetentionTime)
             {
                 GagarinPrefs.CacheCreationTime = default(DateTime);
-                Context.IsUsingCache = false;
-                Log.Warning("GAGARIN: Cache expired!");
+                AssetPipelineCoordinator.RequestXmlRebuild("Cache retention period expired");
                 GagarinSettings.WriteSettings();
             }
+
+            Context.IsUsingCache = GagarinPrefs.Enabled &&
+                                   AssetPipelineCoordinator.CanUseXmlCache &&
+                                   GagarinEnvironmentInfo.CacheExists;
+
+            RunningModsSetUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.ModListFilePath);
+
             if (GagarinPrefs.Enabled)
             {
+                if (!Context.IsUsingCache)
+                    Log.Warning("GAGARIN: No valid READY XML generation is active; rebuilding through RimWorld's normal XML pipeline.");
                 GagarinPatcher.PatchAll();
             }
             else
             {
-                Log.Message("GAGARIN: <color=red>Missile Girl's XML Caching is disabled!</color>");
+                Log.Message("GAGARIN: <color=red>Missile Girl's XML caching is disabled.</color>");
             }
-        }
-
-
-        private static Assembly ResolveHandler(object sender, ResolveEventArgs e)
-        {
-            Log.Error($"MissileGirl: Trying to resolve {e.Name}");
-
-            Logger.Debug($"MissileGirl: Trying to resolve {e.Name}", file: "ResolveHandler.log");
-
-            return null;
         }
 
         [Main.OnStaticConstructor]
         public static void StartUpFinished()
         {
             if (Prefs.LogVerbose)
-            {
                 Log.Message("GAGARIN: <color=green>StartUpFinished called!</color>");
-            }
 
             Context.Assets.Clear();
             Context.AssetsHashes.Clear();
@@ -100,9 +78,17 @@ namespace Gagarin
             Context.DefsXmlAssets.Clear();
             Context.XmlAssets.Clear();
             Context.CurrentLoadingMod = null;
-
             CachedDefHelper.Clean();
-        }
 
+            try
+            {
+                AssetPipelineCoordinator.PruneOldData();
+                AssetPipelineCoordinator.RecordStartupComplete();
+            }
+            catch (Exception exception)
+            {
+                Log.Warning($"GAGARIN: Asset Pipeline cleanup failed without affecting startup.\n{exception}");
+            }
+        }
     }
 }
