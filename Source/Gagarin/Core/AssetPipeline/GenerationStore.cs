@@ -17,17 +17,27 @@ namespace Gagarin
         {
             Directory.CreateDirectory(GagarinEnvironmentInfo.GenerationsFolderPath);
             ActiveGenerationName = ReadActiveName();
-            if (!IsReady(ActiveGenerationPath)) ActiveGenerationName = FindNewestReadyGeneration();
-            if (!string.IsNullOrEmpty(ActiveGenerationName)) AtomicFile.WriteAllText(GagarinEnvironmentInfo.ActiveGenerationFilePath, ActiveGenerationName);
+            if (!IsReady(ActiveGenerationPath))
+                ActiveGenerationName = FindNewestReadyGeneration();
+
+            if (!string.IsNullOrEmpty(ActiveGenerationName))
+                AtomicFile.WriteAllText(GagarinEnvironmentInfo.ActiveGenerationFilePath, ActiveGenerationName);
+            else
+                DeleteIfExists(GagarinEnvironmentInfo.ActiveGenerationFilePath);
         }
 
         public bool RestoreActiveLegacyView()
         {
             Initialize();
-            if (!IsReady(ActiveGenerationPath)) return false;
+            if (!IsReady(ActiveGenerationPath))
+            {
+                InvalidateXmlView();
+                return false;
+            }
+
             try
             {
-                RestoreFile("Unified.xml", GagarinEnvironmentInfo.UnifiedXmlFilePath);
+                RestoreFile("Unified.xml", GagarinEnvironmentInfo.UnifiedXmlFilePath, true);
                 RestoreFile("Unified_Original.xml", GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath);
                 RestoreFile("AssetsHash.xml", GagarinEnvironmentInfo.HashFilePath);
                 RestoreFile("AssetsHashInt.xml", GagarinEnvironmentInfo.HashFilePathInt);
@@ -96,13 +106,18 @@ namespace Gagarin
         public bool TryRollback()
         {
             var current = ActiveGenerationName;
-            foreach (var candidate in EnumerateReadyGenerations().Where(name => !string.Equals(name, current, StringComparison.OrdinalIgnoreCase)).OrderByDescending(name => name, StringComparer.Ordinal))
+            foreach (var candidate in EnumerateReadyGenerations()
+                         .Where(name => !string.Equals(name, current, StringComparison.OrdinalIgnoreCase))
+                         .OrderByDescending(name => name, StringComparer.Ordinal))
             {
                 ActiveGenerationName = candidate;
                 try
                 {
                     AtomicFile.WriteAllText(GagarinEnvironmentInfo.ActiveGenerationFilePath, candidate);
-                    return RestoreActiveLegacyViewWithoutInitialize();
+                    if (RestoreActiveLegacyViewWithoutInitialize())
+                        return true;
+
+                    MarkActiveBroken("Generation stopped being READY during rollback.");
                 }
                 catch (Exception exception)
                 {
@@ -110,8 +125,10 @@ namespace Gagarin
                     MarkActiveBroken(exception.Message);
                 }
             }
+
             ActiveGenerationName = null;
-            if (File.Exists(GagarinEnvironmentInfo.ActiveGenerationFilePath)) File.Delete(GagarinEnvironmentInfo.ActiveGenerationFilePath);
+            DeleteIfExists(GagarinEnvironmentInfo.ActiveGenerationFilePath);
+            InvalidateXmlView();
             return false;
         }
 
@@ -136,22 +153,50 @@ namespace Gagarin
         public void Prune(int generationsToKeep)
         {
             var keep = Math.Max(2, generationsToKeep);
-            var generations = Directory.Exists(GagarinEnvironmentInfo.GenerationsFolderPath) ? Directory.GetDirectories(GagarinEnvironmentInfo.GenerationsFolderPath, "gen-*").Where(path => !path.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)).OrderByDescending(path => Path.GetFileName(path), StringComparer.Ordinal).ToList() : new List<string>();
-            foreach (var path in generations.Skip(keep))
+            if (!Directory.Exists(GagarinEnvironmentInfo.GenerationsFolderPath))
+                return;
+
+            var generations = Directory.GetDirectories(GagarinEnvironmentInfo.GenerationsFolderPath, "gen-*")
+                .Where(path => !path.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(path => Path.GetFileName(path), StringComparer.Ordinal)
+                .ToList();
+
+            var ready = generations.Where(IsReady).ToList();
+            var retainedReady = new HashSet<string>(
+                ready.Take(keep).Select(Path.GetFileName),
+                StringComparer.OrdinalIgnoreCase);
+
+            if (IsReady(ActiveGenerationPath))
+                retainedReady.Add(ActiveGenerationName);
+
+            foreach (var path in ready)
             {
-                if (string.Equals(Path.GetFileName(path), ActiveGenerationName, StringComparison.OrdinalIgnoreCase)) continue;
-                try { Directory.Delete(path, true); } catch (Exception exception) { Log.Warning($"GAGARIN: Could not prune old generation '{path}'.\n{exception}"); }
+                if (retainedReady.Contains(Path.GetFileName(path)))
+                    continue;
+                DeleteGeneration(path, "old READY");
             }
+
+            foreach (var path in generations.Where(path => !IsReady(path)).Skip(2))
+                DeleteGeneration(path, "old BROKEN/incomplete");
+
             foreach (var temporary in Directory.GetDirectories(GagarinEnvironmentInfo.GenerationsFolderPath, "*.tmp"))
             {
-                try { if (Directory.GetLastWriteTimeUtc(temporary) < DateTime.UtcNow.AddDays(-1)) Directory.Delete(temporary, true); } catch { }
+                try
+                {
+                    if (Directory.GetLastWriteTimeUtc(temporary) < DateTime.UtcNow.AddDays(-1))
+                        Directory.Delete(temporary, true);
+                }
+                catch
+                {
+                    // A concurrently written temporary generation is allowed to remain.
+                }
             }
         }
 
         private bool RestoreActiveLegacyViewWithoutInitialize()
         {
             if (!IsReady(ActiveGenerationPath)) return false;
-            RestoreFile("Unified.xml", GagarinEnvironmentInfo.UnifiedXmlFilePath);
+            RestoreFile("Unified.xml", GagarinEnvironmentInfo.UnifiedXmlFilePath, true);
             RestoreFile("Unified_Original.xml", GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath);
             RestoreFile("AssetsHash.xml", GagarinEnvironmentInfo.HashFilePath);
             RestoreFile("AssetsHashInt.xml", GagarinEnvironmentInfo.HashFilePathInt);
@@ -159,11 +204,18 @@ namespace Gagarin
             return true;
         }
 
-        private void RestoreFile(string generationFileName, string destinationPath)
+        private void RestoreFile(string generationFileName, string destinationPath, bool required = false)
         {
             var source = Path.Combine(ActiveGenerationPath, generationFileName);
-            if (File.Exists(source)) AtomicFile.Copy(source, destinationPath);
-            else if (generationFileName == "Unified.xml") throw new InvalidDataException("Generation is missing Unified.xml");
+            if (File.Exists(source))
+            {
+                AtomicFile.Copy(source, destinationPath);
+                return;
+            }
+
+            DeleteIfExists(destinationPath);
+            if (required)
+                throw new InvalidDataException("Generation is missing " + generationFileName);
         }
 
         private static void CopyIfExists(string sourcePath, string destinationPath, bool required = false)
@@ -186,7 +238,9 @@ namespace Gagarin
             {
                 if (!File.Exists(GagarinEnvironmentInfo.ActiveGenerationFilePath)) return null;
                 var name = File.ReadAllText(GagarinEnvironmentInfo.ActiveGenerationFilePath).Trim();
-                return name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ? null : name;
+                if (string.IsNullOrEmpty(name) || name == "." || name == ".." || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+                    return null;
+                return name;
             }
             catch { return null; }
         }
@@ -196,7 +250,21 @@ namespace Gagarin
         private IEnumerable<string> EnumerateReadyGenerations()
         {
             if (!Directory.Exists(GagarinEnvironmentInfo.GenerationsFolderPath)) yield break;
-            foreach (var directory in Directory.GetDirectories(GagarinEnvironmentInfo.GenerationsFolderPath, "gen-*")) if (IsReady(directory)) yield return Path.GetFileName(directory);
+            foreach (var directory in Directory.GetDirectories(GagarinEnvironmentInfo.GenerationsFolderPath, "gen-*"))
+                if (IsReady(directory))
+                    yield return Path.GetFileName(directory);
+        }
+
+        private static void DeleteGeneration(string path, string kind)
+        {
+            try
+            {
+                Directory.Delete(path, true);
+            }
+            catch (Exception exception)
+            {
+                Log.Warning($"GAGARIN: Could not prune {kind} generation '{path}'.\n{exception}");
+            }
         }
 
         private static bool IsReady(string path) => !string.IsNullOrEmpty(path) && Directory.Exists(path) && File.Exists(Path.Combine(path, ReadyFileName)) && File.Exists(Path.Combine(path, "Unified.xml")) && File.Exists(Path.Combine(path, "manifest.xml"));
