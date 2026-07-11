@@ -1,19 +1,8 @@
-﻿// // Copyright (c) 2026 ViralReaction
-// //
-// // This program and the accompanying materials are made available under the
-// // terms of the Eclipse Public License 2.0 which is available at
-// // http://www.eclipse.org/legal/epl-2.0.
-// //
-// // SPDX-License-Identifier: EPL-2.0
-
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Drawing.Printing;
 using System.IO;
 using System.Xml;
-//using Mono.Security.X509.Extensions;
-using MissileGirl;
 using Verse;
 using static Verse.XmlInheritance;
 
@@ -22,10 +11,7 @@ namespace Gagarin
     public static class CachedDefHelper
     {
         private static XmlDocument document;
-
-        private static List<DefXmlUnit> defs = new List<DefXmlUnit>();
-
-        private static HashSet<string> registeredNames = new HashSet<string>();
+        private static readonly List<DefXmlUnit> Defs = new List<DefXmlUnit>();
 
         private class DefXmlUnit
         {
@@ -42,215 +28,151 @@ namespace Gagarin
 
             document = new XmlDocument();
             document.AppendChild(document.CreateElement("DefXmlStorage"));
+            Defs.Clear();
         }
 
         public static void Clean()
         {
-            defs?.Clear();
-            registeredNames?.Clear();
+            Defs.Clear();
             document?.RemoveAll();
             document = null;
         }
 
         public static void Register(Def def, XmlNode node, LoadableXmlAsset asset)
         {
-            defs.Add(new DefXmlUnit()
+            if (document == null || def == null || node == null)
+                return;
+
+            Defs.Add(new DefXmlUnit
             {
                 def = def,
                 node = node,
                 asset = asset,
-                inheritanceNode = XmlInheritance.resolvedNodes.TryGetValue(node, out XmlInheritanceNode inheritanceNode)
-                        ? inheritanceNode : null
+                inheritanceNode = XmlInheritance.resolvedNodes.TryGetValue(node,
+                    out XmlInheritanceNode inheritanceNode)
+                    ? inheritanceNode
+                    : null
             });
         }
+
         public static void Save()
         {
-            Stopwatch stopwatch = new Stopwatch();
-            stopwatch.Start();
+            if (document?.DocumentElement == null)
+                throw new InvalidOperationException("Gagarin cache document was not prepared");
+
+            Stopwatch stopwatch = Stopwatch.StartNew();
             XmlElement root = document.DocumentElement;
-            XmlElement wrapper;
-            XmlElement resolvedNode;
 
-            foreach (DefXmlUnit unit in defs)
+            foreach (DefXmlUnit unit in Defs)
             {
-                XmlElement node = unit.node as XmlElement;
-                if (unit.inheritanceNode == null)
-                {
-                    wrapper = WrapXmlNode(node, unit.asset?.FullFilePath);
-                    root.AppendChild(wrapper);
+                if (unit.node is not XmlElement sourceNode)
                     continue;
-                }
-                if (unit.inheritanceNode.resolvedXmlNode == null)
-                {
-                    Log.Error($"GAGARIN: {unit.def.defName} has <color=yellow>resolvedXmlNode == null!</color>");
-                    continue;
-                }
 
-                resolvedNode = unit.inheritanceNode.resolvedXmlNode as XmlElement;
-                resolvedNode.RemoveAttribute("ParentName");
-
-                if (resolvedNode.Name != node.Name)
+                XmlElement cacheNode;
+                bool resolved = unit.inheritanceNode != null;
+                if (!resolved)
                 {
-                    XmlElement temp = document.CreateElement(node.Name);
-                    foreach (XmlNode n in resolvedNode.ChildNodes)
+                    cacheNode = sourceNode;
+                }
+                else
+                {
+                    if (unit.inheritanceNode.resolvedXmlNode is not XmlElement resolvedSource)
                     {
-                        if (n.NodeType != XmlNodeType.Element)
-                            continue;
-                        temp.AppendChild(document.ImportNode(n, true));
+                        Log.Error($"GAGARIN: {unit.def.defName} has resolvedXmlNode == null or non-element");
+                        continue;
                     }
-                    resolvedNode = temp;
+
+                    // Never mutate XmlInheritance.resolvedNodes. Other loading code may still reference it.
+                    XmlElement resolvedClone = (XmlElement)document.ImportNode(resolvedSource, true);
+                    resolvedClone.RemoveAttribute("ParentName");
+
+                    if (resolvedClone.Name != sourceNode.Name)
+                    {
+                        XmlElement renamed = document.CreateElement(sourceNode.Name);
+                        foreach (XmlNode child in resolvedClone.ChildNodes)
+                        {
+                            if (child.NodeType == XmlNodeType.Element)
+                                renamed.AppendChild(document.ImportNode(child, true));
+                        }
+                        resolvedClone = renamed;
+                    }
+                    else if (sourceNode.HasAttribute("Class") && !resolvedClone.HasAttribute("Class"))
+                    {
+                        resolvedClone.SetAttribute("Class", sourceNode.GetAttribute("Class"));
+                    }
+
+                    cacheNode = resolvedClone;
                 }
-                else if (node.HasAttribute("Class") && !resolvedNode.HasAttribute("Class"))
-                    resolvedNode.SetAttribute("Class", node.GetAttribute("Class"));
 
-                wrapper = WrapXmlNode(resolvedNode, unit.asset?.FullFilePath);
-                wrapper.SetAttribute("resolved", "true");
-
+                XmlElement wrapper = WrapXmlNode(cacheNode, unit.asset?.FullFilePath);
+                if (resolved)
+                    wrapper.SetAttribute("resolved", "true");
                 root.AppendChild(wrapper);
             }
 
-            XmlWriterSettings settings = new XmlWriterSettings
+            AtomicFile.Write(GagarinEnvironmentInfo.UnifiedXmlFilePath, temporaryPath =>
             {
-                CheckCharacters = false,
-                Indent = true,
-                NewLineChars = "\n"
-            };
-            using (XmlWriter writer = XmlWriter.Create(GagarinEnvironmentInfo.UnifiedXmlFilePath, settings))
-            {
+                XmlWriterSettings settings = new XmlWriterSettings
+                {
+                    CheckCharacters = false,
+                    Indent = true,
+                    NewLineChars = "\n"
+                };
+                using XmlWriter writer = XmlWriter.Create(temporaryPath, settings);
                 document.Save(writer);
-            }
+            });
 
             stopwatch.Stop();
-            //
-            //CachedDefHelper.Dump();
-            Log.Warning($"GAGARIN: <color=white>Cache created!</color> creating cache took <color=green>{stopwatch.ElapsedMilliseconds / 1000} seconds</color>");
+            Log.Warning($"GAGARIN: <color=white>Cache created!</color> Creating cache took <color=green>{stopwatch.Elapsed.TotalSeconds:F2} seconds</color>");
         }
 
-        public static void Load(XmlDocument document, Dictionary<XmlNode, LoadableXmlAsset> assets)
+        public static void Load(XmlDocument targetDocument, Dictionary<XmlNode, LoadableXmlAsset> assets)
         {
-            Stopwatch stopwatch = new Stopwatch();
-            stopwatch.Start();
+            Stopwatch stopwatch = Stopwatch.StartNew();
             XmlReaderSettings settings = new XmlReaderSettings
             {
                 IgnoreComments = true,
                 IgnoreWhitespace = true,
                 CheckCharacters = false
             };
+
             using StringReader input = new StringReader(File.ReadAllText(GagarinEnvironmentInfo.UnifiedXmlFilePath));
             using XmlReader xmlReader = XmlReader.Create(input, settings);
-            // Go back and check the 1.5 version to see which one it is actually targeting
-            // LoadableXmlAsset defaultLoadable = new LoadableXmlAsset(Context.Core.Name, GagarinEnvironmentInfo.UnifiedXmlFilePath, "<Empty />")
-            // {
-            //     mod = Context.Core
-            // };
-            //LoadableXmlAsset defaultLoadable = new LoadableXmlAsset(Path.GetFileName(GagarinEnvironmentInfo.UnifiedXmlFilePath), "<Empty />");
-            FileInfo cacheFileInfo = new FileInfo(GagarinEnvironmentInfo.UnifiedXmlFilePath);
-            LoadableXmlAsset defaultLoadable = new LoadableXmlAsset(cacheFileInfo, Context.Core);
-            string path;
-            XmlNode defXml;
+
             assets.Clear();
-            document.RemoveAll();
-            document.AppendChild(document.CreateElement("Defs"));
+            targetDocument.RemoveAll();
+            targetDocument.AppendChild(targetDocument.CreateElement("Defs"));
+
             XmlDocument unifiedDocument = new XmlDocument();
-            unifiedDocument.RemoveAll();
-            Stopwatch documentStopwatch = new Stopwatch();
-            documentStopwatch.Start();
             unifiedDocument.Load(xmlReader);
-            documentStopwatch.Stop();
-            if (Prefs.LogVerbose)
-            {
-                Log.Warning($"GAGARIN: <color=green>Loading XmlDocument</color> took <color=red>{(float)documentStopwatch.ElapsedTicks / Stopwatch.Frequency} seconds</color>");
-            }
+            if (unifiedDocument.DocumentElement == null)
+                throw new InvalidDataException("Unified XML cache has no root element");
 
-            foreach (XmlElement element in unifiedDocument.DocumentElement.ChildNodes)
+            foreach (XmlNode child in unifiedDocument.DocumentElement.ChildNodes)
             {
-                defXml = document.ImportNode(element.FirstChild, true);
-                path = element.GetAttribute("path");
+                if (child is not XmlElement element || element.FirstChild == null)
+                    continue;
 
+                XmlNode defXml = targetDocument.ImportNode(element.FirstChild, true);
+                string path = element.GetAttribute("path");
                 if (Context.XmlAssets.TryGetValue(path, out LoadableXmlAsset asset))
                     assets[defXml] = asset;
 
-                document.DocumentElement.AppendChild(defXml);
+                targetDocument.DocumentElement.AppendChild(defXml);
             }
 
             stopwatch.Stop();
-            if (Prefs.LogVerbose)
-            {
-                Log.Warning($"GAGARIN: <color=green>Loaded from cache!</color> Loading cache took <color=red>{stopwatch.ElapsedMilliseconds / 1000} seconds</color>");
-            }
-            else
-            {
-                Log.Warning($"GARGARIN: <color=green>Finished loading XML from cache!</color>");
-            }
-        }
-
-        private static void Dump()
-        {
-            Stopwatch stopwatch = new Stopwatch();
-            stopwatch.Start();
-            XmlDocument document = new XmlDocument();
-            document.AppendChild(document.CreateElement("Defs"));
-
-            XmlElement root = document.DocumentElement;
-            XmlElement wrapper;
-            XmlElement resolvedNode;
-
-            foreach (DefXmlUnit unit in defs)
-            {
-                XmlElement node = unit.node as XmlElement;
-                if (unit.inheritanceNode == null)
-                {
-                    wrapper = WrapXmlNode(node, unit.asset?.FullFilePath);
-                    root.AppendChild(wrapper);
-                    continue;
-                }
-                if (unit.inheritanceNode.resolvedXmlNode == null)
-                {
-                    Log.Error($"GAGARIN: {unit.def.defName} has <color=yellow>resolvedXmlNode == null!</color>");
-                    continue;
-                }
-
-                resolvedNode = unit.inheritanceNode.resolvedXmlNode as XmlElement;
-                resolvedNode.RemoveAttribute("ParentName");
-
-                if (resolvedNode.Name != node.Name)
-                {
-                    XmlElement temp = document.CreateElement(node.Name);
-                    foreach (XmlNode n in resolvedNode.ChildNodes)
-                    {
-                        if (n.NodeType != XmlNodeType.Element)
-                            continue;
-                        temp.AppendChild(document.ImportNode(n, true));
-                    }
-                    resolvedNode = temp;
-                }
-                else if (node.HasAttribute("Class") && !resolvedNode.HasAttribute("Class"))
-                    resolvedNode.SetAttribute("Class", node.GetAttribute("Class"));
-
-                root.AppendChild(resolvedNode);
-            }
-
-            XmlWriterSettings settings = new XmlWriterSettings
-            {
-                CheckCharacters = false,
-                Indent = true,
-                NewLineChars = "\n"
-            };
-            using (XmlWriter writer = XmlWriter.Create(GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath, settings))
-            {
-                document.Save(writer);
-            }
-
-            stopwatch.Stop();
-            Log.Warning($"GAGARIN: <color=white>Cache created!</color> creating cache took <color=green>{stopwatch.ElapsedMilliseconds / 1000} seconds</color>");
+            Log.Warning(Prefs.LogVerbose
+                ? $"GAGARIN: <color=green>Loaded XML cache</color> in <color=red>{stopwatch.Elapsed.TotalSeconds:F2} seconds</color>"
+                : "GAGARIN: <color=green>Finished loading XML from cache!</color>");
         }
 
         private static XmlElement WrapXmlNode(XmlNode node, string path = null)
         {
-            XmlElement xml = document.CreateElement("Item");
-            xml.SetAttribute("path", path ?? string.Empty);
-            xml.AppendChild(document.ImportNode(node, true));
-            return xml;
+            XmlElement wrapper = document.CreateElement("Item");
+            wrapper.SetAttribute("path", path ?? string.Empty);
+            wrapper.AppendChild(document.ImportNode(node, true));
+            return wrapper;
         }
     }
 }
