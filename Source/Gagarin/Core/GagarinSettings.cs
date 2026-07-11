@@ -26,41 +26,42 @@ namespace Gagarin
         public void ExposeData()
         {
             if (Prefs.LogVerbose)
-                Log.Message($"b.{VersionControl.CurrentBuild}:{VersionControl.CurrentBuildDate}:{VersionControl.CurrentVersionStringWithRev}");
+                Log.Message("b." + VersionControl.CurrentBuild + ":" + VersionControl.CurrentBuildDate + ":" + VersionControl.CurrentVersionStringWithRev);
 
             if (Scribe.mode == LoadSaveMode.Saving)
-                gameBuild = $"{VersionControl.CurrentBuild}:{VersionControl.CurrentBuildDate}:{VersionControl.CurrentVersionStringWithRev}";
+                gameBuild = VersionControl.CurrentBuild + ":" + VersionControl.CurrentBuildDate + ":" + VersionControl.CurrentVersionStringWithRev;
 
             Scribe_Values.Look(ref gameBuild, "gameBuild", null);
             if (Scribe.mode != LoadSaveMode.Saving)
             {
-                var currentGameBuild = $"{VersionControl.CurrentBuild}:{VersionControl.CurrentBuildDate}:{VersionControl.CurrentVersionStringWithRev}";
+                var currentGameBuild = VersionControl.CurrentBuild + ":" + VersionControl.CurrentBuildDate + ":" + VersionControl.CurrentVersionStringWithRev;
                 if (gameBuild == null || currentGameBuild != gameBuild)
                 {
-                    Log.Warning($"GAGARIN: Game build changed {gameBuild} vs {currentGameBuild}; clearing cache.");
+                    Log.Warning("GAGARIN: Game build changed " + gameBuild + " vs " + currentGameBuild + "; clearing cache.");
                     Context.IsUsingCache = false;
                     gameBuild = currentGameBuild;
                 }
             }
 
             Scribe_Values.Look(ref GagarinPrefs.Enabled, "Enabled2", true);
-            Scribe_Values.Look(ref GagarinPrefs.TextureCachingEnabled, "TextureCachingEnabled", false);
+            Scribe_Values.Look(ref GagarinPrefs.TextureCachingEnabled, "TextureCachingEnabled", true);
             Scribe_Values.Look(ref GagarinPrefs.FilterMode, "FilterMode", (int)UnityEngine.FilterMode.Trilinear);
             Scribe_Values.Look(ref GagarinPrefs.MipMapBias, "MipMapBias", float.MinValue);
             Scribe_Values.Look(ref GagarinPrefs.CacheExpires, "CacheExpires", true);
-            Scribe_Values.Look(ref GagarinPrefs.CacheRetentionTime, "CacheRetentionTime", 3);
+            Scribe_Values.Look(ref GagarinPrefs.CacheRetentionTime, "CacheRetentionTime", 14);
+            Scribe_Values.Look(ref GagarinPrefs.MaxCacheGenerations, "MaxCacheGenerations", 3);
+            Scribe_Values.Look(ref GagarinPrefs.TextureCacheMaxMB, "TextureCacheMaxMB", 4096);
+            Scribe_Values.Look(ref GagarinPrefs.RecordAssetPipelineTelemetry, "RecordAssetPipelineTelemetry", true);
 
             if (Scribe.mode == LoadSaveMode.Saving)
                 creationDateInt = GagarinPrefs.CacheCreationTime.ToString(FMT);
 
             Scribe_Values.Look(ref creationDateInt, "creationTime", DateTime.Now.ToString(FMT));
-            if (Scribe.mode != LoadSaveMode.Saving && creationDateInt != null)
+            if (Scribe.mode != LoadSaveMode.Saving && !string.IsNullOrEmpty(creationDateInt))
             {
-                GagarinPrefs.CacheCreationTime = DateTime.ParseExact(
-                    creationDateInt,
-                    FMT,
-                    CultureInfo.InvariantCulture,
-                    DateTimeStyles.AssumeLocal);
+                if (!DateTime.TryParseExact(creationDateInt, FMT, CultureInfo.InvariantCulture,
+                        DateTimeStyles.AssumeLocal, out GagarinPrefs.CacheCreationTime))
+                    GagarinPrefs.CacheCreationTime = default(DateTime);
             }
         }
 
@@ -78,7 +79,7 @@ namespace Gagarin
                     }
                     catch (Exception er)
                     {
-                        Log.Error($"GAGARIN: Error while scribing settings {er}");
+                        Log.Error("GAGARIN: Error while scribing settings " + er);
                         Logger.Debug("Error while scribing settings", exception: er);
                     }
                     finally
@@ -89,10 +90,9 @@ namespace Gagarin
             }
             catch (Exception ex)
             {
-                Log.Error($"GAGARIN: Caught exception while loading mod settings data for {GagarinEnvironmentInfo.CacheFolderPath}. Generating fresh settings. The exception was: {ex}");
+                Log.Error("GAGARIN: Caught exception while loading mod settings data for " + GagarinEnvironmentInfo.CacheFolderPath + ". Generating fresh settings. The exception was: " + ex);
                 Context.Settings = null;
             }
-
             Context.Settings ??= new GagarinSettings();
             WriteSettings();
         }
@@ -120,7 +120,7 @@ namespace Gagarin
             catch (Exception er)
             {
                 failure = er;
-                Log.Error($"GAGARIN: Error while scribing settings {er}");
+                Log.Error("GAGARIN: Error while scribing settings " + er);
                 Logger.Debug("Error while scribing settings", exception: er);
             }
             finally
@@ -134,7 +134,7 @@ namespace Gagarin
                     catch (Exception er)
                     {
                         failure ??= er;
-                        Log.Error($"GAGARIN: Error while finalizing settings {er}");
+                        Log.Error("GAGARIN: Error while finalizing settings " + er);
                         Logger.Debug("Error while finalizing settings", exception: er);
                     }
                 }
@@ -169,7 +169,7 @@ namespace Gagarin
             }
             catch (Exception er)
             {
-                Log.Error($"GAGARIN: Could not activate newly written settings. The previous settings file was kept. {er}");
+                Log.Error("GAGARIN: Could not activate newly written settings. The previous settings file was kept. " + er);
                 Logger.Debug("Could not atomically activate Gagarin settings", exception: er);
             }
             finally

@@ -119,7 +119,7 @@ namespace MissileGirl
                 integrityGameTick = tick + 3;
                 StashPawnsPosition();
             }
-            if ((tick - startingTicksGame).TicksToSeconds() < WARMUP_TIME)
+            if ((tick - startingTicksGame).TicksToSeconds() < WARMUP_TIME) 
             {
                 ticksPassed++;
                 return;
@@ -191,7 +191,7 @@ namespace MissileGirl
             }
             catch (Exception er)
             {
-                Log.Warning($"MissileGirl: Warmup Popup error! {er}");
+                Log.Warning("MissileGirl: Warmup Popup error! " + er);
             }
         }
 
@@ -216,7 +216,7 @@ namespace MissileGirl
             }
             catch (Exception er)
             {
-                Log.Error($"MissileGirl: Stashing settings failed! {er}");
+                Log.Error("MissileGirl: Stashing settings failed! " + er);
                 SettingsStashed = false;
                 settingsBeingStashed = false;
                 current = null;
@@ -234,7 +234,7 @@ namespace MissileGirl
             }
             catch (Exception er)
             {
-                Log.Error($"MissileGirl: Popping settings failed! {er}");
+                Log.Error("MissileGirl: Popping settings failed! " + er);
                 SettingsStashed = false;
                 settingsBeingStashed = false;
                 current = null;
@@ -247,15 +247,11 @@ namespace MissileGirl
         {
             foreach (Pawn pawn in map.mapPawns.AllPawnsSpawned)
             {
-                if (false
-                        || !pawn.Spawned
-                        || pawn.Dead
-                        || pawn.Suspended
-                        || pawn.InContainerEnclosed
-                        || pawn.Destroyed)
+                if (!pawn.Spawned || pawn.Dead || pawn.Suspended || pawn.InContainerEnclosed || pawn.Destroyed)
                     continue;
                 if (positionStash.TryGetValue(pawn.thingIDNumber, out IntVec3 stashedPosition)
-                        && (pawn.positionInt.DistanceTo(pawn.positionInt) >= 7.5f || (pawn.positionInt.InBounds(map) && !pawn.positionInt.Standable(map))))
+                    && stashedPosition.InBounds(map) && stashedPosition.Standable(map)
+                    && (pawn.positionInt.DistanceTo(stashedPosition) >= 7.5f || !pawn.positionInt.InBounds(map) || !pawn.positionInt.Standable(map)))
                 {
                     pawn.jobs?.StopAll(true);
                     pawn.pather.StopDead();
@@ -270,12 +266,7 @@ namespace MissileGirl
             positionStash.Clear();
             foreach (Pawn pawn in map.mapPawns.AllPawnsSpawned)
             {
-                if (false
-                        || !pawn.Spawned
-                        || pawn.Dead
-                        || pawn.Suspended
-                        || pawn.InContainerEnclosed
-                        || pawn.Destroyed)
+                if (!pawn.Spawned || pawn.Dead || pawn.Suspended || pawn.InContainerEnclosed || pawn.Destroyed)
                     continue;
                 positionStash[pawn.thingIDNumber] = pawn.positionInt;
             }

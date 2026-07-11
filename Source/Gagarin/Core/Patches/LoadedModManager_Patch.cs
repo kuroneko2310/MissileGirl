@@ -140,12 +140,12 @@ namespace Gagarin
                         Indent = true,
                         NewLineChars = "\n"
                     };
-                    SaveXmlAtomically(xmlDoc, GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath, settings);
+                    AtomicFile.SaveXml(GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath, xmlDoc, settings);
                 }
                 catch (Exception er)
                 {
                     Logger.Debug("GAGARIN: Failed to write the diagnostic unified XML", er);
-                    Log.Warning($"GAGARIN: Failed to write diagnostic unified XML. Continuing without it.\n{er}");
+                    Log.Warning("GAGARIN: Failed to write diagnostic unified XML. Continuing without it.\n" + er);
                 }
             }
         }
@@ -162,6 +162,7 @@ namespace Gagarin
                 try
                 {
                     CachedDefHelper.Save();
+                    AssetPipelineCoordinator.CommitXmlGeneration();
                     GagarinPrefs.CacheCreationTime = DateTime.Now;
                     GagarinSettings.WriteSettings();
                 }
@@ -186,9 +187,9 @@ namespace Gagarin
                 Context.DefsXmlAssets = assetlookup;
 
                 if (Prefs.LogVerbose)
-                    Log.Warning($"GAGARIN: CombineIntoUnifiedXML has <color=red>Context.IsUsingCache={Context.IsUsingCache}</color>");
+                    Log.Warning("GAGARIN: CombineIntoUnifiedXML has <color=red>Context.IsUsingCache=" + Context.IsUsingCache + "</color>");
 
-                if (!Context.IsUsingCache)
+                if (/Context.IsUsingCache)
                     return true;
 
                 try
@@ -225,7 +226,7 @@ namespace Gagarin
                 catch (Exception er)
                 {
                     Logger.Debug("GAGARIN: Failed to create duplicate XML reports", er);
-                    Log.Warning($"GAGARIN: Duplicate XML report generation failed. Continuing startup.\n{er}");
+                    Log.Warning("GAGARIN: Duplicate XML report generation failed. Continuing startup.\n" + er);
                 }
             }
         }
@@ -234,50 +235,18 @@ namespace Gagarin
         {
             try
             {
-                Context.IsUsingCache = false;
+                AssetPipelineCoordinator.OnCacheLoadFailure(stage, exception);
             }
             catch (Exception disableException)
             {
-                Logger.Debug($"GAGARIN: Failed to disable cache while {stage}", disableException);
+                Context.IsUsingCache = false;
+                Logger.Debug("GAGARIN: Failed to disable cache while " + stage, disableException);
             }
 
-            Logger.Debug($"GAGARIN: Cache error while {stage}", exception);
-            Log.Warning($"GAGARIN: Cache error while {stage}. The cache has been disabled for this load.\n{exception}");
+            Logger.Debug("GAGARIN: Cache error while " + stage, exception);
+            Log.Warning("GAGARIN: Cache error while " + stage + ". The cache has been disabled for this load.\n" + exception);
         }
 
-        private static void SaveXmlAtomically(XmlDocument document, string destinationPath, XmlWriterSettings settings)
-        {
-            var temporaryPath = destinationPath + ".tmp";
-            var backupPath = destinationPath + ".bak";
 
-            try
-            {
-                if (File.Exists(temporaryPath))
-                    File.Delete(temporaryPath);
-
-                using (var writer = XmlWriter.Create(temporaryPath, settings))
-                    document.Save(writer);
-
-                if (File.Exists(destinationPath))
-                {
-                    if (File.Exists(backupPath))
-                        File.Delete(backupPath);
-
-                    File.Replace(temporaryPath, destinationPath, backupPath, true);
-
-                    if (File.Exists(backupPath))
-                        File.Delete(backupPath);
-                }
-                else
-                {
-                    File.Move(temporaryPath, destinationPath);
-                }
-            }
-            finally
-            {
-                if (File.Exists(temporaryPath))
-                    File.Delete(temporaryPath);
-            }
-        }
     }
 }

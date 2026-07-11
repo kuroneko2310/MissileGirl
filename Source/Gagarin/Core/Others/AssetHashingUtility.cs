@@ -1,4 +1,4 @@
-﻿// // Copyright (c) 2026 ViralReaction
+// // Copyright (c) 2026 ViralReaction
 // //
 // // This program and the accompanying materials are made available under the
 // // terms of the Eclipse Public License 2.0 which is available at
@@ -43,9 +43,7 @@ namespace Gagarin
             }
             catch (Exception er)
             {
-                Log.Error($"GAGARIN: Error while loading the old hashes dump! DELETING THE OLD FILE! {er}");
-                if (File.Exists(path))
-                    File.Delete(path);
+                throw new InvalidDataException($"GAGARIN: Asset hash dump is invalid: {path}", er);
             }
             return result;
         }
@@ -75,38 +73,31 @@ namespace Gagarin
             }
             catch (Exception er)
             {
-                Log.Error($"GAGARIN: Error while loading the old hashes dump! DELETING THE OLD FILE! {er}");
-                if (File.Exists(path))
-                    File.Delete(path);
+                throw new InvalidDataException($"GAGARIN: Integer asset hash dump is invalid: {path}", er);
             }
             return result;
         }
 
         public static void Dump<T>(Dictionary<string, T> hashes, string path)
         {
-            if (File.Exists(path))
-                File.Delete(path);
-
-            XmlDocument document = new XmlDocument();
-            XmlElement root = document.CreateElement("AssetsHash");
-            foreach (KeyValuePair<string, T> assetHashPair in hashes)
+            var document = new XmlDocument();
+            var root = document.CreateElement("AssetsHash");
+            foreach (var assetHashPair in hashes)
             {
-                XmlElement modXml = document.CreateElement("Asset");
+                var modXml = document.CreateElement("Asset");
                 modXml.SetAttribute("id", $"{assetHashPair.Key}");
                 modXml.SetAttribute("hash", $"{assetHashPair.Value}");
                 root.AppendChild(modXml);
             }
             document.AppendChild(root);
-            XmlWriterSettings settings = new XmlWriterSettings
+            var settings = new XmlWriterSettings
             {
                 CheckCharacters = false,
                 Indent = true,
-                NewLineChars = "\n"
+                NewLineChars = "\n",
+                Encoding = new UTF8Encoding(false)
             };
-            using (XmlWriter writer = XmlWriter.Create(path, settings))
-            {
-                document.Save(writer);
-            }
+            AtomicFile.SaveXml(path, document, settings);
         }
 
         public static string CalculateHashMd5(string text)
