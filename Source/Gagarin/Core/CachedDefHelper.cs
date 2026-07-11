@@ -82,24 +82,26 @@ namespace Gagarin
                         continue;
                     }
 
-                    // Never mutate XmlInheritance.resolvedNodes. Other loading code may still reference it.
                     XmlElement resolvedClone = (XmlElement)document.ImportNode(resolvedSource, true);
                     resolvedClone.RemoveAttribute("ParentName");
 
                     if (resolvedClone.Name != sourceNode.Name)
                     {
                         XmlElement renamed = document.CreateElement(sourceNode.Name);
-                        foreach (XmlNode child in resolvedClone.ChildNodes)
+                        foreach (XmlAttribute attribute in resolvedClone.Attributes)
                         {
-                            if (child.NodeType == XmlNodeType.Element)
-                                renamed.AppendChild(document.ImportNode(child, true));
+                            if (!attribute.Name.Equals("ParentName", StringComparison.OrdinalIgnoreCase))
+                                renamed.SetAttribute(attribute.Name, attribute.Value);
                         }
+
+                        foreach (XmlNode child in resolvedClone.ChildNodes)
+                            renamed.AppendChild(document.ImportNode(child, true));
+
                         resolvedClone = renamed;
                     }
-                    else if (sourceNode.HasAttribute("Class") && !resolvedClone.HasAttribute("Class"))
-                    {
+
+                    if (sourceNode.HasAttribute("Class") && !resolvedClone.HasAttribute("Class"))
                         resolvedClone.SetAttribute("Class", sourceNode.GetAttribute("Class"));
-                    }
 
                     cacheNode = resolvedClone;
                 }
@@ -121,6 +123,8 @@ namespace Gagarin
                 using XmlWriter writer = XmlWriter.Create(temporaryPath, settings);
                 document.Save(writer);
             });
+            CacheIntegrityUtility.WriteSha256(GagarinEnvironmentInfo.UnifiedXmlFilePath,
+                GagarinEnvironmentInfo.UnifiedXmlHashFilePath);
 
             stopwatch.Stop();
             Log.Warning($"GAGARIN: <color=white>Cache created!</color> Creating cache took <color=green>{stopwatch.Elapsed.TotalSeconds:F2} seconds</color>");
@@ -129,31 +133,51 @@ namespace Gagarin
         public static void Load(XmlDocument targetDocument, Dictionary<XmlNode, LoadableXmlAsset> assets)
         {
             Stopwatch stopwatch = Stopwatch.StartNew();
+            if (!CacheIntegrityUtility.ValidateSha256(GagarinEnvironmentInfo.UnifiedXmlFilePath,
+                    GagarinEnvironmentInfo.UnifiedXmlHashFilePath))
+                throw new InvalidDataException("Unified XML cache checksum validation failed");
+
             XmlReaderSettings settings = new XmlReaderSettings
             {
                 IgnoreComments = true,
                 IgnoreWhitespace = true,
-                CheckCharacters = false
+                CheckCharacters = false,
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null
             };
 
-            using StringReader input = new StringReader(File.ReadAllText(GagarinEnvironmentInfo.UnifiedXmlFilePath));
-            using XmlReader xmlReader = XmlReader.Create(input, settings);
+            XmlDocument unifiedDocument = new XmlDocument { XmlResolver = null };
+            using (FileStream input = new FileStream(GagarinEnvironmentInfo.UnifiedXmlFilePath,
+                       FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (XmlReader xmlReader = XmlReader.Create(input, settings))
+                unifiedDocument.Load(xmlReader);
+
+            if (unifiedDocument.DocumentElement == null || unifiedDocument.DocumentElement.Name != "DefXmlStorage")
+                throw new InvalidDataException("Unified XML cache has an invalid root element");
 
             assets.Clear();
             targetDocument.RemoveAll();
             targetDocument.AppendChild(targetDocument.CreateElement("Defs"));
 
-            XmlDocument unifiedDocument = new XmlDocument();
-            unifiedDocument.Load(xmlReader);
-            if (unifiedDocument.DocumentElement == null)
-                throw new InvalidDataException("Unified XML cache has no root element");
-
             foreach (XmlNode child in unifiedDocument.DocumentElement.ChildNodes)
             {
-                if (child is not XmlElement element || element.FirstChild == null)
+                if (child is not XmlElement element)
                     continue;
 
-                XmlNode defXml = targetDocument.ImportNode(element.FirstChild, true);
+                XmlElement cachedDef = null;
+                foreach (XmlNode wrapperChild in element.ChildNodes)
+                {
+                    if (wrapperChild is XmlElement defElement)
+                    {
+                        cachedDef = defElement;
+                        break;
+                    }
+                }
+
+                if (cachedDef == null)
+                    continue;
+
+                XmlNode defXml = targetDocument.ImportNode(cachedDef, true);
                 string path = element.GetAttribute("path");
                 if (Context.XmlAssets.TryGetValue(path, out LoadableXmlAsset asset))
                     assets[defXml] = asset;
