@@ -85,9 +85,21 @@ namespace Gagarin
         {
             lock (Sync)
             {
-                Log.Warning($"GAGARIN: Active cache generation failed while {stage}; marking it broken and selecting a previous generation for the next load.\n{exception}");
-                Generations.MarkActiveBroken(stage + ": " + exception?.Message);
-                Generations.TryRollback();
+                var replacementBuildFailure =
+                    stage?.IndexOf("preparing", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    stage?.IndexOf("saving", StringComparison.OrdinalIgnoreCase) >= 0;
+
+                if (replacementBuildFailure)
+                {
+                    Log.Warning($"GAGARIN: Building a replacement cache failed while {stage}. The previous READY generation is preserved.\n{exception}");
+                }
+                else
+                {
+                    Log.Warning($"GAGARIN: Active cache generation failed while {stage}; marking it broken and selecting a previous generation for the next load.\n{exception}");
+                    Generations.MarkActiveBroken(stage + ": " + exception?.Message);
+                    Generations.TryRollback();
+                }
+
                 CanUseXmlCache = false;
                 Context.IsUsingCache = false;
             }
