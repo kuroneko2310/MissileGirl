@@ -10,6 +10,7 @@ namespace Gagarin
         private const string TexturesFolderName = "Textures";
         private const string ReportsFolderName = "Reports";
         private const string UnifiedXmlFileName = "Unified.xml";
+        private const string UnifiedXmlHashFileName = "Unified.xml.sha256";
         private const string UnifiedPatchedOriginalXmlFileName = "Unified_Original.xml";
         private const string ModListFileName = "ModList.xml";
         private const string XmlFingerprintFileName = "ModFingerprint.xml";
@@ -38,6 +39,10 @@ namespace Gagarin
         public static string UnifiedXmlFilePath =>
             _unifiedXmlPath ??= Path.Combine(CacheFolderPath, UnifiedXmlFileName);
 
+        private static string _unifiedXmlHashPath;
+        public static string UnifiedXmlHashFilePath =>
+            _unifiedXmlHashPath ??= Path.Combine(CacheFolderPath, UnifiedXmlHashFileName);
+
         private static string _unifiedPatchedOriginalXmlPath;
         public static string UnifiedPatchedOriginalXmlPath =>
             _unifiedPatchedOriginalXmlPath ??= Path.Combine(CacheFolderPath, UnifiedPatchedOriginalXmlFileName);
@@ -50,7 +55,6 @@ namespace Gagarin
         public static string XmlFingerprintFilePath =>
             _xmlFingerprintPath ??= Path.Combine(CacheFolderPath, XmlFingerprintFileName);
 
-        // Compatibility alias for older callers and cache layouts.
         public static string ModFingerprintFilePath => XmlFingerprintFilePath;
 
         private static string _textureFingerprintPath;
@@ -68,6 +72,7 @@ namespace Gagarin
         public static bool CacheExists =>
             Directory.Exists(CacheFolderPath)
             && File.Exists(UnifiedXmlFilePath)
+            && File.Exists(UnifiedXmlHashFilePath)
             && File.Exists(HashFilePath)
             && File.Exists(HashFilePathInt)
             && File.Exists(ModListFilePath)
