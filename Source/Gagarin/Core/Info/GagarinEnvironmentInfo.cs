@@ -12,7 +12,8 @@ namespace Gagarin
         private const string UnifiedXmlFileName = "Unified.xml";
         private const string UnifiedPatchedOriginalXmlFileName = "Unified_Original.xml";
         private const string ModListFileName = "ModList.xml";
-        private const string ModFingerprintFileName = "ModFingerprint.xml";
+        private const string XmlFingerprintFileName = "ModFingerprint.xml";
+        private const string TextureFingerprintFileName = "TextureFingerprint.xml";
         private const string HashFileName = "AssetsHash.xml";
         private const string HashIntFileName = "AssetsHashInt.xml";
         private const string GagarinSettingsFileName = "GagarinSettings.xml";
@@ -45,9 +46,16 @@ namespace Gagarin
         public static string ModListFilePath =>
             _modListPath ??= Path.Combine(CacheFolderPath, ModListFileName);
 
-        private static string _modFingerprintPath;
-        public static string ModFingerprintFilePath =>
-            _modFingerprintPath ??= Path.Combine(CacheFolderPath, ModFingerprintFileName);
+        private static string _xmlFingerprintPath;
+        public static string XmlFingerprintFilePath =>
+            _xmlFingerprintPath ??= Path.Combine(CacheFolderPath, XmlFingerprintFileName);
+
+        // Compatibility alias for older callers and cache layouts.
+        public static string ModFingerprintFilePath => XmlFingerprintFilePath;
+
+        private static string _textureFingerprintPath;
+        public static string TextureFingerprintFilePath =>
+            _textureFingerprintPath ??= Path.Combine(CacheFolderPath, TextureFingerprintFileName);
 
         private static string _hashFilePath;
         public static string HashFilePath =>
@@ -63,24 +71,42 @@ namespace Gagarin
             && File.Exists(HashFilePath)
             && File.Exists(HashFilePathInt)
             && File.Exists(ModListFilePath)
-            && File.Exists(ModFingerprintFilePath);
+            && File.Exists(XmlFingerprintFilePath);
 
-        private static bool _modListChangedInitialized;
-        private static bool _modListChanged;
-
-        public static bool ModListChanged
+        private static bool _xmlInputsChangedInitialized;
+        private static bool _xmlInputsChanged;
+        public static bool XmlInputsChanged
         {
             get
             {
-                if (_modListChangedInitialized)
-                    return _modListChanged;
+                if (_xmlInputsChangedInitialized)
+                    return _xmlInputsChanged;
 
-                _modListChangedInitialized = true;
-                _modListChanged = RunningModsSetUtility.Changed(
-                                      Context.RunningMods.Select(mod => mod.PackageId).ToList(), ModListFilePath)
-                                  || ModFingerprintUtility.Changed(Context.RunningMods, ModFingerprintFilePath);
-                return _modListChanged;
+                _xmlInputsChangedInitialized = true;
+                _xmlInputsChanged = RunningModsSetUtility.Changed(
+                                        Context.RunningMods.Select(mod => mod.PackageId).ToList(), ModListFilePath)
+                                    || ModFingerprintUtility.Changed(Context.RunningMods, XmlFingerprintFilePath,
+                                        ModFingerprintDomain.Xml);
+                return _xmlInputsChanged;
             }
         }
+
+        private static bool _textureInputsChangedInitialized;
+        private static bool _textureInputsChanged;
+        public static bool TextureInputsChanged
+        {
+            get
+            {
+                if (_textureInputsChangedInitialized)
+                    return _textureInputsChanged;
+
+                _textureInputsChangedInitialized = true;
+                _textureInputsChanged = ModFingerprintUtility.Changed(Context.RunningMods,
+                    TextureFingerprintFilePath, ModFingerprintDomain.Textures);
+                return _textureInputsChanged;
+            }
+        }
+
+        public static bool ModListChanged => XmlInputsChanged;
     }
 }
