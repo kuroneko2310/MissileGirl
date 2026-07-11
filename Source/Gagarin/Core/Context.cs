@@ -1,25 +1,15 @@
-﻿// // Copyright (c) 2026 ViralReaction
-// //
-// // This program and the accompanying materials are made available under the
-// // terms of the Eclipse Public License 2.0 which is available at
-// // http://www.eclipse.org/legal/epl-2.0.
-// //
-// // SPDX-License-Identifier: EPL-2.0
-
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Text;
 using System.Xml;
-using Microsoft.Build.Utilities;
 using Verse;
 
 namespace Gagarin
 {
     public static class Context
     {
-        private static bool _isUsingCache = false;
+        private static bool _isUsingCache;
 
         public static bool IsUsingCache
         {
@@ -28,17 +18,15 @@ namespace Gagarin
             {
                 if (!value && value != _isUsingCache)
                 {
-                    if (File.Exists(GagarinEnvironmentInfo.ModListFilePath))
-                        File.Delete(GagarinEnvironmentInfo.ModListFilePath);
-                    if (File.Exists(GagarinEnvironmentInfo.UnifiedXmlFilePath))
-                        File.Delete(GagarinEnvironmentInfo.UnifiedXmlFilePath);
+                    GagarinCacheManager.InvalidateXmlCache();
                     StackTrace trace = new StackTrace(1);
                     StringBuilder builder = new StringBuilder();
                     builder.Append("GAGARIN: <color=yellow>Cache disabled from</color>");
                     for (int i = 0; i < trace.FrameCount; i++)
                     {
-                        var frame = trace.GetFrame(i);
-                        builder.AppendInNewLine($"{frame.GetMethod().DeclaringType?.FullName}:{frame.GetMethod().Name}():{frame.GetFileLineNumber()}");
+                        StackFrame frame = trace.GetFrame(i);
+                        builder.AppendInNewLine(
+                            $"{frame.GetMethod().DeclaringType?.FullName}:{frame.GetMethod().Name}():{frame.GetFileLineNumber()}");
                     }
                     Log.Warning(builder.ToString());
                     MissileGirl.Logger.Debug(builder.ToString());
@@ -47,7 +35,7 @@ namespace Gagarin
             }
         }
 
-        private static bool _isLoadingModXML = false;
+        private static bool _isLoadingModXML;
 
         public static bool IsLoadingModXML
         {
@@ -55,14 +43,12 @@ namespace Gagarin
             set
             {
                 if (!value && value != _isLoadingModXML)
-                {
                     CurrentLoadingMod = null;
-                }
                 _isLoadingModXML = value;
             }
         }
 
-        private static bool _isLoadingPatchXML = false;
+        private static bool _isLoadingPatchXML;
 
         public static bool IsLoadingPatchXML
         {
@@ -70,33 +56,21 @@ namespace Gagarin
             set
             {
                 if (!value && value != _isLoadingPatchXML)
-                {
                     CurrentLoadingMod = null;
-                }
                 _isLoadingPatchXML = value;
             }
         }
 
-        public static bool IsRecovering = false;
-
-        public static bool LoadingFinished = false;
-
+        public static bool IsRecovering;
+        public static bool LoadingFinished;
         public static ModContentPack Core;
-
         public static GagarinSettings Settings;
-
-        public static Dictionary<XmlNode, LoadableXmlAsset> DefsXmlAssets = new Dictionary<XmlNode, LoadableXmlAsset>();
-
-        public static Dictionary<string, LoadableXmlAsset> XmlAssets = new Dictionary<string, LoadableXmlAsset>();
-
-        public static List<ModContentPack> RunningMods = new List<ModContentPack>();
-
-        public static HashSet<string> Assets = new HashSet<string>();
-
-        public static Dictionary<string, string> AssetsHashes = new Dictionary<string, string>();
-
-        public static Dictionary<string, UInt64> AssetsHashesInt = new Dictionary<string, UInt64>();
-
+        public static Dictionary<XmlNode, LoadableXmlAsset> DefsXmlAssets = new();
+        public static Dictionary<string, LoadableXmlAsset> XmlAssets = new();
+        public static List<ModContentPack> RunningMods = new();
+        public static HashSet<string> Assets = new();
+        public static Dictionary<string, string> AssetsHashes = new();
+        public static Dictionary<string, ulong> AssetsHashesInt = new();
         public static ModContentPack CurrentLoadingMod;
     }
 }

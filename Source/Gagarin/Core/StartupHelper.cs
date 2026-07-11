@@ -1,16 +1,6 @@
-﻿// // Copyright (c) 2026 ViralReaction
-// //
-// // This program and the accompanying materials are made available under the
-// // terms of the Eclipse Public License 2.0 which is available at
-// // http://www.eclipse.org/legal/epl-2.0.
-// //
-// // SPDX-License-Identifier: EPL-2.0
-
 using System;
 using System.IO;
 using System.Linq;
-using System.Reflection;
-using JetBrains.Annotations;
 using MissileGirl;
 using Verse;
 
@@ -22,77 +12,73 @@ namespace Gagarin
         public static void StartUpStarted()
         {
             Context.RunningMods = LoadedModManager.RunningMods.ToList();
-            Context.Core = LoadedModManager.RunningMods.First(m => m.IsCoreMod);
+            Context.Core = LoadedModManager.RunningMods.FirstOrDefault(mod => mod.IsCoreMod);
 
-            if (!Directory.Exists(GagarinEnvironmentInfo.CacheFolderPath))
-            {
-                Directory.CreateDirectory(GagarinEnvironmentInfo.CacheFolderPath);
-            }
-            if (!Directory.Exists(GagarinEnvironmentInfo.TexturesFolderPath))
-            {
-                Directory.CreateDirectory(GagarinEnvironmentInfo.TexturesFolderPath);
-            }
+            Directory.CreateDirectory(GagarinEnvironmentInfo.CacheFolderPath);
+            Directory.CreateDirectory(GagarinEnvironmentInfo.TexturesFolderPath);
+
             if (Prefs.LogVerbose)
-            {
                 Log.Message("GAGARIN: <color=green>StartUpStarted called!</color>");
-            }
-            if (GagarinEnvironmentInfo.CacheExists)
-            {
-                if (Prefs.LogVerbose)
-                {
-                    Log.Warning("GAGARIN: <color=green>Cache found</color>");
-                }
 
-                Context.IsUsingCache = true;
-
-                if (GagarinEnvironmentInfo.ModListChanged)
-                {
-                    Context.IsUsingCache = false;
-                    Log.Warning("GAGARIN: Mod list changed! Deleting cache");
-                }
-            }
-            if (!Context.IsUsingCache && GagarinPrefs.Enabled)
-            {
-                Log.Warning("GAGARIN: <color=green>Cache not found or got purged!</color>");
-            }
             Logger.Message("GAGARIN: <color=green>Loading cache settings!</color>");
-            RunningModsSetUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.ModListFilePath);
-
             GagarinSettings.LoadSettings();
-            if (GagarinPrefs.CacheExpires && DateTime.Now.Subtract(GagarinPrefs.CacheCreationTime).Days >= GagarinPrefs.CacheRetentionTime)
+
+            Context.IsUsingCache = GagarinEnvironmentInfo.CacheExists;
+            if (Context.IsUsingCache && GagarinEnvironmentInfo.XmlInputsChanged)
             {
-                GagarinPrefs.CacheCreationTime = default(DateTime);
                 Context.IsUsingCache = false;
-                Log.Warning("GAGARIN: Cache expired!");
+                Log.Warning("GAGARIN: XML inputs, assemblies, mod order, or active load folders changed. Rebuilding XML cache.");
+            }
+
+            if (GagarinEnvironmentInfo.TextureInputsChanged)
+            {
+                GagarinCacheManager.ClearTextureCache("mod textures, assemblies, or active load folders changed");
+                Log.Message("GAGARIN: Texture inputs changed. XML cache was preserved where possible.");
+            }
+
+            if (Context.IsUsingCache && IsCacheExpired())
+            {
+                GagarinPrefs.CacheCreationTime = default;
+                Context.IsUsingCache = false;
+                Log.Warning("GAGARIN: XML cache expired.");
                 GagarinSettings.WriteSettings();
             }
+
+            RunningModsSetUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.ModListFilePath);
+            ModFingerprintUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.XmlFingerprintFilePath,
+                ModFingerprintDomain.Xml);
+            ModFingerprintUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.TextureFingerprintFilePath,
+                ModFingerprintDomain.Textures);
+
+            if (!Context.IsUsingCache && GagarinPrefs.Enabled)
+                Log.Warning("GAGARIN: <color=green>XML cache not found, invalid, or scheduled for rebuilding.</color>");
+
             if (GagarinPrefs.Enabled)
-            {
                 GagarinPatcher.PatchAll();
-            }
             else
-            {
-                Log.Message("GAGARIN: <color=red>Missile Girl's XML Caching is disabled!</color>");
-            }
+                Log.Message("GAGARIN: <color=red>Missile Girl's XML caching is disabled!</color>");
         }
 
-
-        private static Assembly ResolveHandler(object sender, ResolveEventArgs e)
+        private static bool IsCacheExpired()
         {
-            Log.Error($"MissileGirl: Trying to resolve {e.Name}");
+            if (!GagarinPrefs.CacheExpires)
+                return false;
 
-            Logger.Debug($"MissileGirl: Trying to resolve {e.Name}", file: "ResolveHandler.log");
+            DateTime creationTime = GagarinPrefs.CacheCreationTime;
+            if (creationTime == default)
+                return true;
 
-            return null;
+            if (creationTime > DateTime.Now.AddMinutes(5))
+                return true;
+
+            return DateTime.Now.Subtract(creationTime).TotalDays >= Math.Max(1, GagarinPrefs.CacheRetentionTime);
         }
 
         [Main.OnStaticConstructor]
         public static void StartUpFinished()
         {
             if (Prefs.LogVerbose)
-            {
                 Log.Message("GAGARIN: <color=green>StartUpFinished called!</color>");
-            }
 
             Context.Assets.Clear();
             Context.AssetsHashes.Clear();
@@ -103,6 +89,5 @@ namespace Gagarin
 
             CachedDefHelper.Clean();
         }
-
     }
 }

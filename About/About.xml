@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <ModMetaData>
     <name>Missile Girl - Performance Mod</name>
     <author>ViralReaction</author>
@@ -6,7 +6,7 @@
         <li>1.6</li>
     </supportedVersions>
     <packageId>vr.missilegirl</packageId>
-	<modIconPath IgnoreIfNoMatchingField="True">MissileGirl/UI/missilegirl_preview</modIconPath>
+    <modIconPath IgnoreIfNoMatchingField="True">MissileGirl/UI/missilegirl_preview</modIconPath>
     <modDependencies>
         <li>
             <packageId>brrainz.harmony</packageId>
@@ -19,6 +19,7 @@
         <li>Ludeon.RimWorld</li>
         <li>Ludeon.RimWorld.Royalty</li>
         <li>brrainz.harmony</li>
+        <li>Telefonmast.GraphicsSettings</li>
         <li>UnlimitedHugs.HugsLib</li>
         <li>TheKingInYellow.Lope</li>
         <li>RunneLatki.RabbieRaceMod</li>
@@ -41,25 +42,22 @@
     <description>
         MissileGirl:
 
-        MissileGirl is mod that is designed to improve RimWorld Performance.
+        MissileGirl is a mod designed to improve RimWorld performance.
 
         Important note: MissileGirl should be the last mod in your mod list.
 
-
         Github Link: https://github.com/ViralReaction/MissileGirl
 
-        MissileGirl is OpenSource and for anyone to use, modify, update.
+        MissileGirl is open source and available for anyone to use, modify, and update.
 
         Credits:
 
         * Current developer: ViralReaction
-		* Previous developer: Karim
-		* The Thumbnail: Smxrez
+        * Previous developer: Karim
+        * The Thumbnail: Smxrez
 
-        Special Thanks goes to:
-  
-		Karim for creating original RocketMan
+        Special thanks goes to Karim for creating the original RocketMan.
 
-        You can always ask questions on the Dubwise discord server: https://discord.gg/mKVDMqq4
+        You can ask questions on the Dubwise discord server: https://discord.gg/mKVDMqq4
     </description>
 </ModMetaData>

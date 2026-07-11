@@ -1,15 +1,6 @@
-﻿// // Copyright (c) 2026 ViralReaction
-// //
-// // This program and the accompanying materials are made available under the
-// // terms of the Eclipse Public License 2.0 which is available at
-// // http://www.eclipse.org/legal/epl-2.0.
-// //
-// // SPDX-License-Identifier: EPL-2.0
-
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Xml;
 using Verse;
 
@@ -32,16 +23,19 @@ namespace Gagarin
                 using StringReader input = new StringReader(File.ReadAllText(path));
                 using XmlReader xmlReader = XmlReader.Create(input, settings);
                 document.Load(xmlReader);
-                foreach (XmlElement modXml in document.DocumentElement.ChildNodes)
+                if (document.DocumentElement == null)
+                    return result;
+
+                foreach (XmlNode node in document.DocumentElement.ChildNodes)
                 {
-                    if (modXml.Name != "Mod")
+                    if (node is not XmlElement modXml || modXml.Name != "Mod")
                         continue;
                     result.Add(modXml.GetAttribute("packageId"));
                 }
             }
-            catch (Exception er)
+            catch (Exception exception)
             {
-                Log.Error($"GAGARIN: Error while loading the old modlist dump! DELETING THE OLD FILE! {er}");
+                Log.Error($"GAGARIN: Error while loading the old mod list dump. Deleting it. {exception}");
                 if (File.Exists(path))
                     File.Delete(path);
             }
@@ -50,40 +44,42 @@ namespace Gagarin
 
         public static void Dump(List<ModContentPack> mods, string path)
         {
-            if (File.Exists(path))
-                File.Delete(path);
+            AtomicFile.Write(path, temporaryPath =>
+            {
+                XmlDocument document = new XmlDocument();
+                XmlElement root = document.CreateElement("RunningMods");
+                document.AppendChild(root);
 
-            XmlDocument document = new XmlDocument();
-            XmlElement root = document.CreateElement("RunningMods");
-            foreach (ModContentPack mod in mods)
-            {
-                XmlElement modXml = document.CreateElement("Mod");
-                modXml.SetAttribute("packageId", mod.PackageId);
-                root.AppendChild(modXml);
-            }
-            document.AppendChild(root);
-            XmlWriterSettings settings = new XmlWriterSettings
-            {
-                CheckCharacters = false,
-                Indent = true,
-                NewLineChars = "\n"
-            };
-            using (XmlWriter writer = XmlWriter.Create(path, settings))
-            {
+                foreach (ModContentPack mod in mods)
+                {
+                    XmlElement modXml = document.CreateElement("Mod");
+                    modXml.SetAttribute("packageId", mod.PackageId);
+                    root.AppendChild(modXml);
+                }
+
+                XmlWriterSettings settings = new XmlWriterSettings
+                {
+                    CheckCharacters = false,
+                    Indent = true,
+                    NewLineChars = "\n"
+                };
+                using XmlWriter writer = XmlWriter.Create(temporaryPath, settings);
                 document.Save(writer);
-            }
+            });
         }
 
         public static bool Changed(List<string> current, string path)
         {
             if (!File.Exists(path))
                 return true;
+
             List<string> old = Load(path);
             if (current.Count != old.Count)
                 return true;
+
             for (int i = 0; i < current.Count; i++)
             {
-                if (current[i] != old[i])
+                if (!string.Equals(current[i], old[i], StringComparison.OrdinalIgnoreCase))
                     return true;
             }
             return false;
