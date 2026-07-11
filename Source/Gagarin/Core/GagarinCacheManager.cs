@@ -12,6 +12,9 @@ namespace Gagarin
         {
             lock (CacheMutationSync)
             {
+                // Remove the completion marker first. A crash during deletion can never leave
+                // a partially invalidated cache looking usable on the next startup.
+                DeleteFile(GagarinEnvironmentInfo.CacheSchemaFilePath);
                 DeleteFile(GagarinEnvironmentInfo.UnifiedXmlFilePath);
                 DeleteFile(GagarinEnvironmentInfo.UnifiedXmlHashFilePath);
                 DeleteFile(GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath);
