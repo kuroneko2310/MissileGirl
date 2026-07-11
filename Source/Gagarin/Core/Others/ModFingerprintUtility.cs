@@ -88,7 +88,7 @@ namespace Gagarin
             Dictionary<string, string> result = new Dictionary<string, string>();
             try
             {
-                XmlDocument document = new XmlDocument();
+                XmlDocument document = new XmlDocument { XmlResolver = null };
                 document.Load(path);
                 if (document.DocumentElement == null)
                     return result;
@@ -129,14 +129,15 @@ namespace Gagarin
 
                 if (domain == ModFingerprintDomain.Xml)
                 {
-                    AddFolder(builder, Path.Combine(loadFolder, "Defs"), seenFiles, IsXmlInput, true);
-                    AddFolder(builder, Path.Combine(loadFolder, "Patches"), seenFiles, IsXmlInput, true);
+                    // XML contents are hashed by LoadableXmlAsset_Patch later in the same startup.
+                    // Metadata here gives an early rejection without reading every XML file twice.
+                    AddFolder(builder, Path.Combine(loadFolder, "Defs"), seenFiles, IsXmlInput, false);
+                    AddFolder(builder, Path.Combine(loadFolder, "Patches"), seenFiles, IsXmlInput, false);
                     AddFolder(builder, Path.Combine(loadFolder, "Assemblies"), seenFiles, IsAssembly, true);
                 }
                 else
                 {
                     AddFolder(builder, Path.Combine(loadFolder, "Textures"), seenFiles, IsTextureInput, false);
-                    // DLL updates can alter texture-loading behavior even when image files are unchanged.
                     AddFolder(builder, Path.Combine(loadFolder, "Assemblies"), seenFiles, IsAssembly, true);
                 }
             }
