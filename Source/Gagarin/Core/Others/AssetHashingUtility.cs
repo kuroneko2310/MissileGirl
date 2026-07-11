@@ -90,41 +90,44 @@ namespace Gagarin
             });
         }
 
+        // Retained for source compatibility with existing callers. The implementation now
+        // returns SHA-256 rather than MD5.
         public static string CalculateHashMd5(string text)
         {
-            using MD5 md5Hasher = MD5.Create();
-            byte[] data = md5Hasher.ComputeHash(Encoding.UTF8.GetBytes(text ?? string.Empty));
-            return BitConverter.ToString(data);
+            using SHA256 sha = SHA256.Create();
+            byte[] data = sha.ComputeHash(Encoding.UTF8.GetBytes(text ?? string.Empty));
+            return BitConverter.ToString(data).Replace("-", string.Empty);
         }
 
         public static ulong CalculateHash(string read, bool lowTolerance = true)
         {
-            ulong hashedValue = 0;
-            int i = 0;
-            ulong multiplier = 1193;
-            while (i < read.Length)
+            ulong hashedValue = 1469598103934665603UL;
+            int increment = lowTolerance ? 2 : 1;
+            for (int i = 0; i < read.Length; i += increment)
             {
-                hashedValue += read[i] * multiplier;
-                multiplier *= 37;
-                i += lowTolerance ? 2 : 1;
+                char value = read[i];
+                hashedValue ^= (byte)value;
+                hashedValue *= 1099511628211UL;
+                hashedValue ^= (byte)(value >> 8);
+                hashedValue *= 1099511628211UL;
             }
             return hashedValue;
         }
 
-        public static void CalculateFileHashes(string path, out string md5Hash, out ulong contentHash)
+        public static void CalculateFileHashes(string path, out string strongHash, out ulong contentHash)
         {
             const int bufferSize = 64 * 1024;
             byte[] buffer = new byte[bufferSize];
             ulong fnv = 1469598103934665603UL;
 
-            using MD5 md5 = MD5.Create();
+            using SHA256 sha = SHA256.Create();
             using FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite,
                 bufferSize, FileOptions.SequentialScan);
 
             int read;
             while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
             {
-                md5.TransformBlock(buffer, 0, read, buffer, 0);
+                sha.TransformBlock(buffer, 0, read, buffer, 0);
                 for (int i = 0; i < read; i++)
                 {
                     fnv ^= buffer[i];
@@ -132,8 +135,8 @@ namespace Gagarin
                 }
             }
 
-            md5.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
-            md5Hash = BitConverter.ToString(md5.Hash ?? Array.Empty<byte>());
+            sha.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+            strongHash = BitConverter.ToString(sha.Hash ?? Array.Empty<byte>()).Replace("-", string.Empty);
             contentHash = fnv;
         }
 
