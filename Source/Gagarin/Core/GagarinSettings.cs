@@ -1,53 +1,39 @@
-﻿// // Copyright (c) 2026 ViralReaction
-// //
-// // This program and the accompanying materials are made available under the
-// // terms of the Eclipse Public License 2.0 which is available at
-// // http://www.eclipse.org/legal/epl-2.0.
-// //
-// // SPDX-License-Identifier: EPL-2.0
-
 using System;
 using System.Globalization;
 using System.IO;
-using RimWorld;
 using MissileGirl;
+using RimWorld;
 using Verse;
 
 namespace Gagarin
 {
     public class GagarinSettings : IExposable
     {
-        private const string FMT = "yyyy-MM-dd HH:mm:ss.fffffff";
+        private const string DateFormat = "yyyy-MM-dd HH:mm:ss.fffffff";
 
-        private string creationDateInt = null;
-
+        private string creationDateInt;
         private string gameBuild;
-
-        public GagarinSettings()
-        {
-        }
 
         public void ExposeData()
         {
+            string currentGameBuild =
+                $"{VersionControl.CurrentBuild}:{VersionControl.CurrentBuildDate}:{VersionControl.CurrentVersionStringWithRev}";
+
             if (Prefs.LogVerbose)
-            {
-                Log.Message($"b.{VersionControl.CurrentBuild}:{VersionControl.CurrentBuildDate}:{VersionControl.CurrentVersionStringWithRev}");
-            }
+                Log.Message($"b.{currentGameBuild}");
+
             if (Scribe.mode == LoadSaveMode.Saving)
-            {
-                gameBuild = $"{VersionControl.CurrentBuild}:{VersionControl.CurrentBuildDate}:{VersionControl.CurrentVersionStringWithRev}";
-            }
+                gameBuild = currentGameBuild;
+
             Scribe_Values.Look(ref gameBuild, "gameBuild", null);
-            if (Scribe.mode != LoadSaveMode.Saving)
+            if (Scribe.mode != LoadSaveMode.Saving && (gameBuild == null || currentGameBuild != gameBuild))
             {
-                string curGameBuild = $"{VersionControl.CurrentBuild}:{VersionControl.CurrentBuildDate}:{VersionControl.CurrentVersionStringWithRev}";
-                if (gameBuild == null || curGameBuild != gameBuild)
-                {
-                    Log.Warning($"GAGARIN: Game build changed {gameBuild} vs {curGameBuild} clearing cache");
-                    Context.IsUsingCache = false;
-                    gameBuild = curGameBuild;
-                }
+                Log.Warning($"GAGARIN: Game build changed {gameBuild} vs {currentGameBuild}; clearing XML cache");
+                GagarinCacheManager.InvalidateXmlCache("RimWorld game build changed");
+                Context.IsUsingCache = false;
+                gameBuild = currentGameBuild;
             }
+
             Scribe_Values.Look(ref GagarinPrefs.Enabled, "Enabled2", true);
             Scribe_Values.Look(ref GagarinPrefs.TextureCachingEnabled, "TextureCachingEnabled", false);
             Scribe_Values.Look(ref GagarinPrefs.FilterMode, "FilterMode", (int)UnityEngine.FilterMode.Trilinear);
@@ -56,19 +42,23 @@ namespace Gagarin
             Scribe_Values.Look(ref GagarinPrefs.CacheRetentionTime, "CacheRetentionTime", 3);
 
             if (Scribe.mode == LoadSaveMode.Saving)
+                creationDateInt = GagarinPrefs.CacheCreationTime.ToString(DateFormat, CultureInfo.InvariantCulture);
+
+            Scribe_Values.Look(ref creationDateInt, "creationTime", DateTime.Now.ToString(DateFormat,
+                CultureInfo.InvariantCulture));
+
+            if (Scribe.mode != LoadSaveMode.Saving && creationDateInt != null)
             {
-                this.creationDateInt = GagarinPrefs.CacheCreationTime.ToString(FMT);
-            }
-            Scribe_Values.Look(ref this.creationDateInt, "creationTime", DateTime.Now.ToString(FMT));
-            if (Scribe.mode != LoadSaveMode.Saving && this.creationDateInt != null)
-            {
-                GagarinPrefs.CacheCreationTime = DateTime.ParseExact(this.creationDateInt, FMT, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal);
+                if (DateTime.TryParseExact(creationDateInt, DateFormat, CultureInfo.InvariantCulture,
+                        DateTimeStyles.AssumeLocal, out DateTime creationTime))
+                    GagarinPrefs.CacheCreationTime = creationTime;
+                else
+                    GagarinPrefs.CacheCreationTime = default;
             }
         }
 
         public static void LoadSettings()
         {
-            bool settingsFound = false;
             try
             {
                 if (File.Exists(GagarinEnvironmentInfo.GagarinSettingsFilePath))
@@ -77,14 +67,13 @@ namespace Gagarin
                     try
                     {
                         Scribe_Deep.Look(ref Context.Settings, "ModSettings");
-                        settingsFound = Context.Settings != null;
-                        if (Context.Settings == null)
-                            Context.Settings = new GagarinSettings();
+                        Context.Settings ??= new GagarinSettings();
                     }
-                    catch (Exception er)
+                    catch (Exception exception)
                     {
-                        Log.Error($"GAGARIN: Error while scribing settings {er}");
-                        Logger.Debug("Error while scribing settings", exception: er);
+                        Log.Error($"GAGARIN: Error while scribing settings {exception}");
+                        Logger.Debug("Error while scribing settings", exception: exception);
+                        Context.Settings = null;
                     }
                     finally
                     {
@@ -92,50 +81,39 @@ namespace Gagarin
                     }
                 }
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
-                Log.Error($"GAGARIN: Caught exception while loading mod settings data for {GagarinEnvironmentInfo.CacheFolderPath}. Generating fresh settings. The exception was: {ex.ToString()}");
+                Log.Error($"GAGARIN: Caught exception while loading settings for {GagarinEnvironmentInfo.CacheFolderPath}. Generating fresh settings. {exception}");
                 Context.Settings = null;
             }
-            if (Context.Settings == null)
-            {
-                Context.Settings = new GagarinSettings();
-            }
+
+            Context.Settings ??= new GagarinSettings();
             WriteSettings();
-            //if (!settingsFound)
-            //{
-            //    WriteSettings();
-            //}
         }
 
         public static void WriteSettings()
         {
-            if (!Directory.Exists(GagarinEnvironmentInfo.CacheFolderPath))
+            Directory.CreateDirectory(GagarinEnvironmentInfo.CacheFolderPath);
+            Directory.CreateDirectory(GagarinEnvironmentInfo.TexturesFolderPath);
+
+            AtomicFile.Write(GagarinEnvironmentInfo.GagarinSettingsFilePath, temporaryPath =>
             {
-                Directory.CreateDirectory(GagarinEnvironmentInfo.CacheFolderPath);
-            }
-            if (!Directory.Exists(GagarinEnvironmentInfo.TexturesFolderPath))
-            {
-                Directory.CreateDirectory(GagarinEnvironmentInfo.TexturesFolderPath);
-            }
-            if (File.Exists(GagarinEnvironmentInfo.GagarinSettingsFilePath))
-            {
-                File.Delete(GagarinEnvironmentInfo.GagarinSettingsFilePath);
-            }
-            Scribe.saver.InitSaving(GagarinEnvironmentInfo.GagarinSettingsFilePath, "SettingsBlock");
-            try
-            {
-                Scribe_Deep.Look(ref Context.Settings, "ModSettings");
-            }
-            catch (Exception er)
-            {
-                Log.Error($"GAGARIN: Error while scribing settings {er}");
-                Logger.Debug("Error while scribing settings", exception: er);
-            }
-            finally
-            {
-                Scribe.saver.FinalizeSaving();
-            }
+                Scribe.saver.InitSaving(temporaryPath, "SettingsBlock");
+                try
+                {
+                    Scribe_Deep.Look(ref Context.Settings, "ModSettings");
+                }
+                catch (Exception exception)
+                {
+                    Log.Error($"GAGARIN: Error while scribing settings {exception}");
+                    Logger.Debug("Error while scribing settings", exception: exception);
+                    throw;
+                }
+                finally
+                {
+                    Scribe.saver.FinalizeSaving();
+                }
+            });
         }
     }
 }
