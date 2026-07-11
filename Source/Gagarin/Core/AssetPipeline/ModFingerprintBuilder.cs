@@ -53,7 +53,7 @@ namespace Gagarin
                 return result;
             }
 
-            foreach (var path in EnumerateRelevantFiles(root))
+            foreach (var path in EnumerateRelevantFiles(root, result))
             {
                 try
                 {
@@ -87,15 +87,7 @@ namespace Gagarin
                 catch (Exception exception)
                 {
                     Log.Warning($"GAGARIN: Could not fingerprint '{path}' for {result.PackageId}. The file will force revalidation.\n{exception}");
-                    var relative = GetRelativePath(root, path);
-                    result.Files[relative] = new FileFingerprint
-                    {
-                        RelativePath = relative,
-                        Size = -1,
-                        LastWriteUtcTicks = DateTime.UtcNow.Ticks,
-                        StrongHash = PipelineHash.TextSha256(exception.GetType().FullName + ":" + exception.Message),
-                        Domain = Classify(relative)
-                    };
+                    AddScanFailure(result, root, path, exception);
                 }
             }
 
@@ -106,49 +98,112 @@ namespace Gagarin
             return result;
         }
 
-        private static IEnumerable<string> EnumerateRelevantFiles(string root)
+        private static IEnumerable<string> EnumerateRelevantFiles(string root, ModFingerprint result)
         {
-            IEnumerable<string> files;
-            try
-            {
-                files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories);
-            }
-            catch (Exception exception)
-            {
-                Log.Warning($"GAGARIN: Could not enumerate files under '{root}'.\n{exception}");
-                yield break;
-            }
+            var pending = new Stack<string>();
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            pending.Push(Path.GetFullPath(root));
 
-            foreach (var file in files)
+            while (pending.Count > 0)
             {
-                var relative = GetRelativePath(root, file);
-                if (Classify(relative) != CacheDomain.None)
-                    yield return file;
+                var directory = pending.Pop();
+                var normalizedDirectory = PipelineHash.NormalizePath(directory);
+                if (!visited.Add(normalizedDirectory))
+                    continue;
+
+                string[] files;
+                try
+                {
+                    files = Directory.GetFiles(directory);
+                }
+                catch (Exception exception)
+                {
+                    Log.Warning($"GAGARIN: Could not enumerate files under '{directory}'. The mod will be revalidated on the next load.\n{exception}");
+                    AddScanFailure(result, root, directory, exception);
+                    files = Array.Empty<string>();
+                }
+
+                foreach (var file in files)
+                {
+                    var relative = GetRelativePath(root, file);
+                    if (Classify(relative) != CacheDomain.None)
+                        yield return file;
+                }
+
+                string[] directories;
+                try
+                {
+                    directories = Directory.GetDirectories(directory);
+                }
+                catch (Exception exception)
+                {
+                    Log.Warning($"GAGARIN: Could not enumerate directories under '{directory}'. The mod will be revalidated on the next load.\n{exception}");
+                    AddScanFailure(result, root, directory, exception);
+                    continue;
+                }
+
+                foreach (var child in directories)
+                {
+                    try
+                    {
+                        if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) != 0)
+                        {
+                            Log.Warning($"GAGARIN: Skipping reparse-point directory while fingerprinting '{child}'.");
+                            continue;
+                        }
+
+                        pending.Push(child);
+                    }
+                    catch (Exception exception)
+                    {
+                        Log.Warning($"GAGARIN: Could not inspect directory '{child}'. The mod will be revalidated on the next load.\n{exception}");
+                        AddScanFailure(result, root, child, exception);
+                    }
+                }
             }
+        }
+
+        private static void AddScanFailure(ModFingerprint result, string root, string path, Exception exception)
+        {
+            var location = GetRelativePath(root, path);
+            var marker = "__scan_error__/" + PipelineHash.TextSha256(location);
+            var now = DateTime.UtcNow.Ticks;
+            result.Files[marker] = new FileFingerprint
+            {
+                RelativePath = marker,
+                Size = -1,
+                LastWriteUtcTicks = now,
+                StrongHash = PipelineHash.TextSha256(exception.GetType().FullName + ":" + exception.Message + ":" + now),
+                Domain = CacheDomain.Xml | CacheDomain.Code | CacheDomain.Texture | CacheDomain.Metadata
+            };
         }
 
         private static CacheDomain Classify(string relativePath)
         {
-            var normalized = (relativePath ?? string.Empty).Replace('\\', '/');
+            var normalized = (relativePath ?? string.Empty).Replace('\\', '/').Trim('/');
             var lower = normalized.ToLowerInvariant();
             var fileName = Path.GetFileName(lower);
             var extension = Path.GetExtension(lower);
+            var segments = lower.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
 
-            if (fileName == "about.xml" || fileName == "loadfolders.xml" ||
-                lower.StartsWith("about/", StringComparison.Ordinal))
+            if (fileName == "about.xml" || fileName == "loadfolders.xml" || HasSegment(segments, "about"))
                 return CacheDomain.Metadata;
 
-            if (lower.StartsWith("assemblies/", StringComparison.Ordinal) && extension == ".dll")
+            if (extension == ".dll" && HasSegment(segments, "assemblies"))
                 return CacheDomain.Code;
 
-            if ((lower.StartsWith("defs/", StringComparison.Ordinal) ||
-                 lower.StartsWith("patches/", StringComparison.Ordinal)) && extension == ".xml")
+            if (extension == ".xml" && (HasSegment(segments, "defs") || HasSegment(segments, "patches")))
                 return CacheDomain.Xml;
 
-            if (lower.StartsWith("textures/", StringComparison.Ordinal) && TextureExtensions.Contains(extension))
+            if (TextureExtensions.Contains(extension) && HasSegment(segments, "textures"))
                 return CacheDomain.Texture;
 
             return CacheDomain.None;
+        }
+
+        private static bool HasSegment(IEnumerable<string> segments, string expected)
+        {
+            return segments.Any(segment => string.Equals(segment, expected, StringComparison.OrdinalIgnoreCase));
         }
 
         private static string SignatureFor(ModFingerprint mod, CacheDomain domain)
