@@ -1,12 +1,13 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using Verse;
 
 namespace Gagarin
 {
     public static class GraphicsIntegrationBridge
     {
-        private const string ProviderStateFileName = "GraphicsProvider.state";
         private static readonly object Sync = new object();
 
         public static string GetTextureCacheFolder()
@@ -25,20 +26,44 @@ namespace Gagarin
             lock (Sync)
             {
                 string state = $"{providerId}|{providerVersion ?? "unknown"}|{texturePolicyFingerprint}";
-                string statePath = Path.Combine(GetTextureCacheFolder(), ProviderStateFileName);
-                string previousState = File.Exists(statePath) ? File.ReadAllText(statePath) : null;
+                string statePath = GetProviderStatePath(providerId);
+                string previousState = ReadStateSafely(statePath);
 
                 if (string.Equals(previousState, state, StringComparison.Ordinal))
                     return;
 
                 GagarinCacheManager.ClearTextureCache(
                     previousState.NullOrEmpty()
-                        ? $"registered graphics provider {providerId}"
+                        ? $"registered or migrated graphics provider {providerId}"
                         : $"graphics policy changed for {providerId}");
 
-                statePath = Path.Combine(GetTextureCacheFolder(), ProviderStateFileName);
-                AtomicFile.Write(statePath, temporaryPath => File.WriteAllText(temporaryPath, state));
+                AtomicFile.Write(statePath, temporaryPath =>
+                    File.WriteAllText(temporaryPath, state, new UTF8Encoding(false)));
                 Log.Message($"GAGARIN: Graphics provider registered: {providerId} ({providerVersion})");
+            }
+        }
+
+        private static string GetProviderStatePath(string providerId)
+        {
+            using SHA256 sha = SHA256.Create();
+            string providerHash = BitConverter.ToString(
+                    sha.ComputeHash(Encoding.UTF8.GetBytes(providerId.ToLowerInvariant())))
+                .Replace("-", string.Empty)
+                .Substring(0, 16);
+            return Path.Combine(GagarinEnvironmentInfo.CacheFolderPath,
+                $"GraphicsProvider-{providerHash}.state");
+        }
+
+        private static string ReadStateSafely(string path)
+        {
+            try
+            {
+                return File.Exists(path) ? File.ReadAllText(path, Encoding.UTF8) : null;
+            }
+            catch (Exception exception)
+            {
+                Log.Warning($"GAGARIN: Graphics provider state was unreadable and will be rebuilt: {exception.Message}");
+                return null;
             }
         }
     }
