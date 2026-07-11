@@ -176,7 +176,7 @@ namespace Gagarin
                 DeleteGeneration(path, "old READY");
             }
 
-            foreach (var path in generations.Where(path => !IsReady(path)).Skip(2))
+            foreach (var path in generations.Where(path => Directory.Exists(path) && !IsReady(path)).Skip(2))
                 DeleteGeneration(path, "old BROKEN/incomplete");
 
             foreach (var temporary in Directory.GetDirectories(GagarinEnvironmentInfo.GenerationsFolderPath, "*.tmp"))
