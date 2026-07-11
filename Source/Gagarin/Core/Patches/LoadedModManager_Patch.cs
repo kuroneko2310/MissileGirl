@@ -171,12 +171,19 @@ namespace Gagarin
 
                 try
                 {
+                    // Remove an old completion marker before replacing any generation artifacts.
+                    if (File.Exists(GagarinEnvironmentInfo.CacheSchemaFilePath))
+                        File.Delete(GagarinEnvironmentInfo.CacheSchemaFilePath);
+
                     CachedDefHelper.Save();
                     GagarinPrefs.CacheCreationTime = DateTime.Now;
                     RunningModsSetUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.ModListFilePath);
                     ModFingerprintUtility.Dump(Context.RunningMods, GagarinEnvironmentInfo.XmlFingerprintFilePath,
                         ModFingerprintDomain.Xml);
                     GagarinSettings.WriteSettings();
+
+                    // This is the commit point for the whole XML cache generation.
+                    CacheSchemaUtility.MarkCurrent(GagarinEnvironmentInfo.CacheSchemaFilePath);
                 }
                 catch (Exception exception)
                 {
