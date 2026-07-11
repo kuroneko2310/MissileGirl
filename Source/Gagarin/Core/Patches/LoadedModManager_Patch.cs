@@ -125,6 +125,20 @@ namespace Gagarin
                 if (Context.IsUsingCache || xmlDoc == null)
                     return;
 
+                if (!Prefs.LogVerbose)
+                {
+                    try
+                    {
+                        if (File.Exists(GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath))
+                            File.Delete(GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath);
+                    }
+                    catch
+                    {
+                        // Diagnostic cleanup is best-effort.
+                    }
+                    return;
+                }
+
                 try
                 {
                     AtomicFile.Write(GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath, temporaryPath =>
