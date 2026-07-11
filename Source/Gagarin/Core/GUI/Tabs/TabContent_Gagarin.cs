@@ -1,15 +1,4 @@
-﻿// // Copyright (c) 2026 ViralReaction
-// //
-// // This program and the accompanying materials are made available under the
-// // terms of the Eclipse Public License 2.0 which is available at
-// // http://www.eclipse.org/legal/epl-2.0.
-// //
-// // SPDX-License-Identifier: EPL-2.0
-
 using System;
-using System.Collections.Generic;
-using System.IO;
-using RimWorld;
 using MissileGirl;
 using MissileGirl.Tabs;
 using UnityEngine;
@@ -20,48 +9,45 @@ namespace Gagarin
     public class TabContent_Gagarin : ITabContent
     {
         private string cacheRetentionTimeBuffer;
-
-        private Listing_Collapsible collapsible = new Listing_Collapsible(expanded: true);
+        private readonly Listing_Collapsible collapsible = new Listing_Collapsible(expanded: true);
 
         public override Texture2D Icon => TexTab.Gagarin;
-
         public override bool ShouldShow => true;
-
         public override string Label => KeyedResources.Gagarin_Tab;
-
-        public TabContent_Gagarin()
-        {
-
-        }
 
         public override void DoContent(Rect rect)
         {
             collapsible.Begin(rect, KeyedResources.MissileGirl_Settings);
             collapsible.Label(KeyedResources.MissileGirl_EnableGagarin_Tip);
-            if (collapsible.CheckboxLabeled(KeyedResources.MissileGirl_EnableGagarin, ref GagarinPrefs.Enabled) && !GagarinPrefs.Enabled)
+
+            if (collapsible.CheckboxLabeled(KeyedResources.MissileGirl_EnableGagarin,
+                    ref GagarinPrefs.Enabled) && !GagarinPrefs.Enabled)
             {
-                ClearCache();
+                Context.IsUsingCache = false;
+                GagarinCacheManager.InvalidateXmlCache("XML caching disabled by user");
             }
+
             if (GagarinPrefs.Enabled)
             {
                 collapsible.Line(1);
-                if (collapsible.CheckboxLabeled("Gagarin.CacheExpires".Translate(), ref GagarinPrefs.CacheExpires, "Gagarin.CacheExpires.Desc".Translate()))
-                {
+                if (collapsible.CheckboxLabeled("Gagarin.CacheExpires".Translate(),
+                        ref GagarinPrefs.CacheExpires, "Gagarin.CacheExpires.Desc".Translate()))
                     GagarinSettings.WriteSettings();
-                }
 
                 if (GagarinPrefs.CacheExpires)
                 {
-                    int daysLeft = Math.Max(0, GagarinPrefs.CacheRetentionTime - DateTime.Now.Subtract(GagarinPrefs.CacheCreationTime).Days);
+                    int ageDays = GagarinPrefs.CacheCreationTime == default
+                        ? GagarinPrefs.CacheRetentionTime
+                        : (int)Math.Floor(DateTime.Now.Subtract(GagarinPrefs.CacheCreationTime).TotalDays);
+                    int daysLeft = Math.Max(0, GagarinPrefs.CacheRetentionTime - Math.Max(0, ageDays));
                     collapsible.Label("Gagarin.Expiry".Translate(daysLeft));
                     collapsible.Gap(4);
 
-                    collapsible.Lambda(30, rect =>
+                    collapsible.Lambda(30, fieldRect =>
                     {
                         cacheRetentionTimeBuffer ??= GagarinPrefs.CacheRetentionTime.ToString();
-
-                        Rect labelRect = rect.LeftPartPixels(rect.width - 80f);
-                        Rect fieldRect = rect.RightPartPixels(80f);
+                        Rect labelRect = fieldRect.LeftPartPixels(fieldRect.width - 80f);
+                        Rect numericRect = fieldRect.RightPartPixels(80f);
 
                         TextAnchor oldAnchor = Text.Anchor;
                         Text.Anchor = TextAnchor.MiddleLeft;
@@ -69,13 +55,10 @@ namespace Gagarin
                         Text.Anchor = oldAnchor;
 
                         int oldValue = GagarinPrefs.CacheRetentionTime;
-
-                        Widgets.TextFieldNumeric(fieldRect, ref GagarinPrefs.CacheRetentionTime, ref cacheRetentionTimeBuffer, min: 1, max: 365);
-
+                        Widgets.TextFieldNumeric(numericRect, ref GagarinPrefs.CacheRetentionTime,
+                            ref cacheRetentionTimeBuffer, 1, 365);
                         if (GagarinPrefs.CacheRetentionTime != oldValue)
-                        {
                             GagarinSettings.WriteSettings();
-                        }
                     }, useMargins: true);
                 }
 
@@ -85,11 +68,29 @@ namespace Gagarin
                 collapsible.Line(1);
                 collapsible.Label(KeyedResources.Gagarin_ClearCache_Description);
 
-                collapsible.Lambda(25, rect =>
+                collapsible.Lambda(25, buttonRect =>
                 {
-                    if (Widgets.ButtonText(rect, label: KeyedResources.Gagarin_ClearCache))
+                    if (Widgets.ButtonText(buttonRect, "Rebuild XML cache"))
                     {
-                        ClearCache();
+                        Context.IsUsingCache = false;
+                        GagarinCacheManager.InvalidateXmlCache("manual XML rebuild");
+                        GagarinPrefs.CacheCreationTime = default;
+                        GagarinSettings.WriteSettings();
+                    }
+                }, useMargins: true);
+
+                collapsible.Lambda(25, buttonRect =>
+                {
+                    if (Widgets.ButtonText(buttonRect, "Clear texture cache only"))
+                        GagarinCacheManager.ClearTextureCache("manual texture cache reset");
+                }, useMargins: true);
+
+                collapsible.Lambda(25, buttonRect =>
+                {
+                    if (Widgets.ButtonText(buttonRect, "Clear all MissileGirl caches"))
+                    {
+                        Context.IsUsingCache = false;
+                        GagarinCacheManager.ClearAllCaches("manual full cache reset");
                         GagarinSettings.WriteSettings();
                     }
                 }, useMargins: true);
@@ -97,36 +98,18 @@ namespace Gagarin
 
             collapsible.End(ref rect);
             if (GUI.changed)
-            {
                 GagarinSettings.WriteSettings();
-            }
-        }
-
-        private static void ClearCache()
-        {
-            foreach (string file in new[]
-            {
-                GagarinEnvironmentInfo.UnifiedXmlFilePath, GagarinEnvironmentInfo.ModListFilePath, GagarinEnvironmentInfo.UnifiedPatchedOriginalXmlPath,
-            })
-            {
-                if (File.Exists(file))
-                {
-                    File.Delete(file);
-                }
-            }
         }
 
         public override void OnSelect()
         {
             base.OnSelect();
-
             GagarinSettings.WriteSettings();
         }
 
         public override void OnDeselect()
         {
             base.OnDeselect();
-
             GagarinSettings.WriteSettings();
         }
 
