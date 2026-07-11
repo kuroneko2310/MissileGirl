@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Xml;
@@ -10,20 +9,26 @@ using Verse;
 
 namespace Gagarin
 {
+    internal enum ModFingerprintDomain
+    {
+        Xml,
+        Textures
+    }
+
     internal static class ModFingerprintUtility
     {
-        private static readonly HashSet<string> RelevantExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        private static readonly HashSet<string> TextureExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            ".dll", ".xml", ".png", ".dds", ".jpg", ".jpeg"
+            ".png", ".dds", ".jpg", ".jpeg", ".tga", ".bmp"
         };
 
-        public static bool Changed(List<ModContentPack> mods, string path)
+        public static bool Changed(List<ModContentPack> mods, string path, ModFingerprintDomain domain)
         {
             if (!File.Exists(path))
                 return true;
 
             Dictionary<string, string> previous = Load(path);
-            Dictionary<string, string> current = Build(mods);
+            Dictionary<string, string> current = Build(mods, domain);
             if (previous.Count != current.Count)
                 return true;
 
@@ -37,13 +42,14 @@ namespace Gagarin
             return false;
         }
 
-        public static void Dump(List<ModContentPack> mods, string path)
+        public static void Dump(List<ModContentPack> mods, string path, ModFingerprintDomain domain)
         {
-            Dictionary<string, string> fingerprints = Build(mods);
+            Dictionary<string, string> fingerprints = Build(mods, domain);
             AtomicFile.Write(path, temporaryPath =>
             {
                 XmlDocument document = new XmlDocument();
                 XmlElement root = document.CreateElement("ModFingerprints");
+                root.SetAttribute("domain", domain.ToString());
                 document.AppendChild(root);
 
                 foreach (KeyValuePair<string, string> pair in fingerprints)
@@ -65,14 +71,14 @@ namespace Gagarin
             });
         }
 
-        private static Dictionary<string, string> Build(List<ModContentPack> mods)
+        private static Dictionary<string, string> Build(List<ModContentPack> mods, ModFingerprintDomain domain)
         {
             Dictionary<string, string> result = new Dictionary<string, string>();
             for (int index = 0; index < mods.Count; index++)
             {
                 ModContentPack mod = mods[index];
                 string key = $"{index}:{mod.PackageId}";
-                result[key] = BuildFingerprint(mod);
+                result[key] = BuildFingerprint(mod, domain);
             }
             return result;
         }
@@ -96,80 +102,105 @@ namespace Gagarin
             }
             catch (Exception exception)
             {
-                Log.Warning($"GAGARIN: Failed loading mod fingerprint manifest: {exception}");
+                Log.Warning($"GAGARIN: Failed loading mod fingerprint manifest '{path}': {exception}");
                 return new Dictionary<string, string>();
             }
             return result;
         }
 
-        private static string BuildFingerprint(ModContentPack mod)
+        private static string BuildFingerprint(ModContentPack mod, ModFingerprintDomain domain)
         {
-            string rootPath = GetRootDirectory(mod);
+            string rootPath = mod.RootDir ?? string.Empty;
             StringBuilder builder = new StringBuilder();
-            builder.Append(mod.PackageId).Append('|').Append(NormalizePath(rootPath));
+            builder.Append("domain=").Append(domain)
+                .Append("|package=").Append(mod.PackageId)
+                .Append("|root=").Append(NormalizePath(rootPath));
 
-            if (!Directory.Exists(rootPath))
-                return HashText(builder.ToString());
+            AddMetadataFile(builder, Path.Combine(rootPath, "About", "About.xml"), true);
+            AddMetadataFile(builder, Path.Combine(rootPath, "LoadFolders.xml"), true);
 
-            try
+            HashSet<string> seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            List<string> loadFolders = mod.foldersToLoadDescendingOrder ?? new List<string> { rootPath };
+            for (int folderIndex = 0; folderIndex < loadFolders.Count; folderIndex++)
             {
-                IEnumerable<string> files = Directory.EnumerateFiles(rootPath, "*", SearchOption.AllDirectories)
-                    .Where(IsRelevantFile)
-                    .OrderBy(path => path, StringComparer.OrdinalIgnoreCase);
+                string loadFolder = loadFolders[folderIndex];
+                builder.Append("\nloadFolder[").Append(folderIndex).Append("]=")
+                    .Append(NormalizePath(loadFolder));
 
-                foreach (string file in files)
+                if (domain == ModFingerprintDomain.Xml)
                 {
-                    FileInfo info = new FileInfo(file);
-                    string relativePath = GetRelativePath(rootPath, file);
-                    builder.Append('\n').Append(relativePath)
-                        .Append('|').Append(info.Length)
-                        .Append('|').Append(info.LastWriteTimeUtc.Ticks);
-
-                    if (ShouldStrongHash(file))
-                        builder.Append('|').Append(HashFile(file));
+                    AddFolder(builder, Path.Combine(loadFolder, "Defs"), seenFiles, IsXmlInput, true);
+                    AddFolder(builder, Path.Combine(loadFolder, "Patches"), seenFiles, IsXmlInput, true);
+                    AddFolder(builder, Path.Combine(loadFolder, "Assemblies"), seenFiles, IsAssembly, true);
                 }
-            }
-            catch (Exception exception)
-            {
-                builder.Append("|enumeration-error|").Append(exception.GetType().FullName);
+                else
+                {
+                    AddFolder(builder, Path.Combine(loadFolder, "Textures"), seenFiles, IsTextureInput, false);
+                    // DLL updates can alter texture-loading behavior even when image files are unchanged.
+                    AddFolder(builder, Path.Combine(loadFolder, "Assemblies"), seenFiles, IsAssembly, true);
+                }
             }
 
             return HashText(builder.ToString());
         }
 
-        private static string GetRootDirectory(ModContentPack mod)
+        private static void AddFolder(StringBuilder builder, string folder, HashSet<string> seenFiles,
+            Func<string, bool> predicate, bool strongHash)
         {
-            PropertyInfo property = mod.GetType().GetProperty("RootDir",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            return property?.GetValue(mod) as string ?? string.Empty;
+            if (!Directory.Exists(folder))
+                return;
+
+            try
+            {
+                foreach (string file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories)
+                             .Where(predicate)
+                             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+                {
+                    string fullPath = Path.GetFullPath(file);
+                    if (!seenFiles.Add(fullPath))
+                        continue;
+                    AddMetadataFile(builder, fullPath, strongHash);
+                }
+            }
+            catch (Exception exception)
+            {
+                builder.Append("\nfolder-error=").Append(NormalizePath(folder))
+                    .Append('|').Append(exception.GetType().FullName);
+            }
         }
 
-        private static bool IsRelevantFile(string path)
+        private static void AddMetadataFile(StringBuilder builder, string path, bool strongHash)
         {
-            string fileName = Path.GetFileName(path);
-            if (fileName.Equals("About.xml", StringComparison.OrdinalIgnoreCase)
-                || fileName.Equals("LoadFolders.xml", StringComparison.OrdinalIgnoreCase))
-                return true;
-            return RelevantExtensions.Contains(Path.GetExtension(path));
+            try
+            {
+                FileInfo info = new FileInfo(path);
+                if (!info.Exists)
+                {
+                    builder.Append("\nmissing=").Append(NormalizePath(path));
+                    return;
+                }
+
+                builder.Append("\nfile=").Append(NormalizePath(info.FullName))
+                    .Append('|').Append(info.Length)
+                    .Append('|').Append(info.LastWriteTimeUtc.Ticks);
+
+                if (strongHash)
+                    builder.Append('|').Append(HashFile(info.FullName));
+            }
+            catch (Exception exception)
+            {
+                builder.Append("\nfile-error=").Append(NormalizePath(path))
+                    .Append('|').Append(exception.GetType().FullName);
+            }
         }
 
-        private static bool ShouldStrongHash(string path)
-        {
-            string extension = Path.GetExtension(path);
-            string fileName = Path.GetFileName(path);
-            return extension.Equals(".dll", StringComparison.OrdinalIgnoreCase)
-                   || fileName.Equals("About.xml", StringComparison.OrdinalIgnoreCase)
-                   || fileName.Equals("LoadFolders.xml", StringComparison.OrdinalIgnoreCase);
-        }
+        private static bool IsXmlInput(string path) =>
+            Path.GetExtension(path).Equals(".xml", StringComparison.OrdinalIgnoreCase);
 
-        private static string GetRelativePath(string rootPath, string fullPath)
-        {
-            string normalizedRoot = NormalizePath(rootPath).TrimEnd('/') + "/";
-            string normalizedFull = NormalizePath(fullPath);
-            return normalizedFull.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase)
-                ? normalizedFull.Substring(normalizedRoot.Length)
-                : normalizedFull;
-        }
+        private static bool IsAssembly(string path) =>
+            Path.GetExtension(path).Equals(".dll", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsTextureInput(string path) => TextureExtensions.Contains(Path.GetExtension(path));
 
         private static string NormalizePath(string path) => (path ?? string.Empty).Replace('\\', '/');
 
@@ -182,7 +213,7 @@ namespace Gagarin
         private static string HashFile(string path)
         {
             using SHA256 sha = SHA256.Create();
-            using FileStream stream = File.OpenRead(path);
+            using FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             return ToHex(sha.ComputeHash(stream));
         }
 
